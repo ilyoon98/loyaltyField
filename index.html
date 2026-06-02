@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.7.1</title>
+<title>으리챗 난투전 — 프로토타입 v0.7.2</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -131,7 +131,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.7.1</p>
+    <p id="headerSub">프로토타입 v0.7.2</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -1403,24 +1403,53 @@ async function playOnlineAction(act) {
   }
 
   // ── 행동 종료 ─────────────────────────────────────────────
+  const wasOwner = amOwner();
   onlineReplaying = false;
   isPlaying = false;
   onlineLocalLogOnly = false;
   queueHighlight = { attacker:null, targeted:null };
   clearAllZones();
 
-  if (amOwner()) {
-    // Stage 1 임시 정산: 손패 보충 + 액션 종료 표시 + 턴 넘김/승리 (Stage 4에서 권위 스냅으로 정식화)
-    state.turnOrder.forEach(id => {
-      const p = state.players[id];
-      if (!p.alive) return;
-      while (toArr(p.hand).length < CONFIG.maxHand) p.hand.push(drawCard());
-    });
-    await actionRef().child('done').set(true);
-    if (!checkWinOnline()) await onlineNextTurn();
+  if (wasOwner) {
+    // owner 권위 정산: 손패 보충 + 턴 넘김 + 승패를 단일 원자적 write로 (중간 상태 없음)
+    await commitSettlement();
+    // 이후 자기 리스너가 최종 state로 idle 렌더
   } else {
-    render();
+    // spectator: 재생 중 놓친 DB 업데이트(특히 currentTurnIndex)를 다시 읽어 reconcile
+    const fresh = (await db.ref('rooms/' + roomId).once('value')).val();
+    if (fresh) onRoomData(fresh);
   }
+}
+
+// owner 권위 정산 (Stage 1~3): 손패 보충·턴 넘김·승패를 한 번의 update로 확정.
+// 모든 클라는 이 DB값(currentTurnIndex/phase)만 보고 자기 턴 여부를 판정한다.
+async function commitSettlement() {
+  // 1) 손패 보충 (재생 중 적용된 HP/소모 위에 얹음)
+  state.turnOrder.forEach(id => {
+    const p = state.players[id];
+    if (!p.alive) return;
+    p.hand = toArr(p.hand);
+    while (p.hand.length < CONFIG.maxHand) p.hand.push(drawCard());
+  });
+  // 2) 승패 / 다음 턴 계산
+  const alive = state.turnOrder.filter(id => state.players[id].alive);
+  let phase = 'playing', winner = null, nextIdx = state.currentTurnIndex;
+  if (alive.length <= 1) {
+    phase = 'finished'; winner = alive[0] || null;
+  } else {
+    nextIdx = (state.currentTurnIndex + 1) % state.turnOrder.length;
+    for (let t = 0; t < state.turnOrder.length; t++) {
+      if (state.players[state.turnOrder[nextIdx]].alive) break;
+      nextIdx = (nextIdx + 1) % state.turnOrder.length;
+    }
+  }
+  // 3) 단일 원자적 write (players + currentTurnIndex + phase/winner + action 종료)
+  await db.ref('rooms/' + roomId).update({
+    players: state.players,
+    currentTurnIndex: nextIdx,
+    phase, winner,
+    'action/done': true,
+  });
 }
 
 // 온라인 패스: 트랜잭션으로 AP 검증 + 드로우 + 턴 넘김
