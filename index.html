@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.7.2</title>
+<title>으리챗 난투전 — 프로토타입 v0.8.0</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -131,7 +131,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.7.2</p>
+    <p id="headerSub">프로토타입 v0.8.0</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -314,6 +314,8 @@ let prevLogLen = 0;
 let onlineSeq = 0;              // 마지막으로 재생 시작한 action.seq
 let onlineReplaying = false;    // 온라인 큐 재생 중
 let onlineLocalLogOnly = false; // 온라인 재생 중 로그는 DOM에만 (DB 미기록)
+let awaitWatchStarted = false;  // watchAwait 상설 리스너 시작 여부
+let awaitModalIndex = null;     // 현재 열린 응답 모달의 await index
 
 // ── 화면 전환 ────────────────────────────────────────────────
 function showScreen(name) {
@@ -549,6 +551,11 @@ function syncStateFromData(data) {
 
 // DB 변경 디스패처: 새 액션이면 재생 시작, 아니면 idle 렌더.
 function onRoomData(data) {
+  // 응답 모달 상설 리스너 시작 (게임 진입 시 1회). 재생 가드보다 먼저.
+  if (!awaitWatchStarted && data.phase && data.phase !== 'waiting') {
+    awaitWatchStarted = true;
+    watchAwait();
+  }
   // 재생 중에는 어떤 갱신도 무시한다.
   // (1) 재생 중 적용한 HP/연출 로컬 미러를 DB 옛값으로 덮어쓰는 것 방지
   // (2) await/input/queue 변경은 재생기 내부 waiter가 직접 처리
@@ -932,15 +939,21 @@ function buildReactionEvents(attackerId, targetId, atkKey, dmg, choice, aoe) {
       text:`🥋 ${tName} 떠넘김!<br><small>랜덤 ${nT}명에게</small>`,
       log:`${tName}: ${rDef.name}! ${dmg} 데미지를 랜덤 ${nT}명에게 떠넘김`,
       logKind:'ref', stageCls:'ref' });
+    // victim을 build 시점에 굴려 baking (온라인 결정성 — 재생 시점 롤링 금지).
+    // 다중 bounce는 splice 시점 alive로 일괄 baking, 중간에 죽은 대상은 counterAnnounce dead-skip.
+    const aliveNow = state.turnOrder.filter(id => state.players[id].alive);
     for (let n = 0; n < nT; n++) {
+      const victim = aliveNow[Math.floor(Math.random() * aliveNow.length)];
       evs.push({ kind:'clearAll' });
-      // victim은 counterAnnounce 핸들러에서 실행 시점 확정
-      evs.push({ kind:'counterAnnounce', from:targetId, to:null,
-                 pickAlive:true, bouncerIs:targetId, label:'떠넘김', amount:dmg });
-      // counterAnnounce가 자기참조면 이걸 damage로 교체; 아니면 target/attacker 주입
-      // incoming:dmg 명시 → 강제 맞기 시 올바른 데미지 보장 (v8 확인사항 1번)
-      evs.push({ kind:'askDefense', attacker:targetId, target:null,
-                 item:atkKey, incoming:dmg, chain:true, resolveTarget:true });
+      evs.push({ kind:'counterAnnounce', from:targetId, to:victim, label:'떠넘김', amount:dmg });
+      if (victim === targetId) {
+        // 자기 자신에게 튕김 → 즉시 맞기 (추가 반응 없음, askDefense 없음 → chainCount 무증가)
+        evs.push({ kind:'damage', target:victim, amount:dmg, label:'자기 튕기기' });
+      } else {
+        // 연쇄: victim이 다시 응답 가능 (incoming:dmg 명시 → 강제맞기 시 올바른 데미지)
+        evs.push({ kind:'askDefense', attacker:targetId, target:victim,
+                   item:atkKey, incoming:dmg, chain:true });
+      }
     }
     evs.push({ kind:'restoreAllAnnounce', actor:attackerId, card:atkKey, aoe:!!aoe });
   }
@@ -1128,20 +1141,8 @@ async function renderEventVisual(ev, q, i) {
     await sleep(300);
 
   } else if (ev.kind === 'counterAnnounce') {
-    if (ev.pickAlive) {
-      // Bounce victim 확정 (로컬 전용; 온라인은 owner가 build 시 baking — Stage 2)
-      const alive = state.turnOrder.filter(id => state.players[id].alive);
-      if (alive.length === 0) { if (q[i + 1]) q.splice(i + 1, 1); return; }
-      ev.to = alive[Math.floor(Math.random() * alive.length)];
-      const nextEv = q[i + 1];
-      if (nextEv?.resolveTarget) {
-        if (ev.to === ev.bouncerIs) {
-          q[i + 1] = { kind:'damage', target:ev.to, amount:ev.amount, label:'자기 튕기기' };
-        } else {
-          nextEv.target = ev.to; nextEv.attacker = ev.from;
-        }
-      }
-    }
+    // victim(ev.to)은 buildReactionEvents에서 baking됨 (RNG 없음 — 결정적, 온라인 동기화 안전).
+    // baking된 대상이 그새 죽었으면 이 패턴(다음 askDefense/damage)을 스킵.
     if (!state.players[ev.to]?.alive) {
       const nxt = q[i + 1];
       if (nxt && (nxt.kind === 'damage' || nxt.kind === 'askDefense') && nxt.target === ev.to)
@@ -1355,6 +1356,24 @@ async function submitOnlineInput(index, choice) {
   });
 }
 
+// 상설 리스너: action/await를 감시해 내가 응답자(target)면 모달 표시.
+// 재생 루프와 분리 → owner가 target이어도(반사 역전 등) deadlock 없이 모달이 뜬다.
+function watchAwait() {
+  db.ref('rooms/' + roomId + '/action/await').on('value', snap => {
+    const aw = snap.val();
+    if (aw && aw.target === myUid) {
+      if (awaitModalIndex === aw.index) return;   // 이미 이 index 모달 열림
+      awaitModalIndex = aw.index;
+      const reactions = getReactionCards(myUid, aw.aoe);   // Stage2: DEF/REFLECT/Bounce 모두 허용
+      openDefenseModal(aw.attacker, myUid, aw.item, aw.incoming, reactions,
+        choice => { awaitModalIndex = null; submitOnlineInput(aw.index, choice); });
+    } else {
+      // await 해제(resolve 후) 또는 내 차례 아님 → 모달 닫기
+      if (awaitModalIndex !== null) { closeReactModal(); awaitModalIndex = null; }
+    }
+  });
+}
+
 // 온라인 재생기: 모든 클라가 동일 큐 재생. askDefense만 transport 분기.
 async function playOnlineAction(act) {
   onlineReplaying = true;
@@ -1363,6 +1382,7 @@ async function playOnlineAction(act) {
   render();
 
   let q = act.queue.slice();
+  let chainCount = 0;   // owner만 집행하는 연쇄 카운터 (안전 상한 20)
   const amOwner = () => myUid === state.turnOrder[state.currentTurnIndex];
 
   let i = 0;
@@ -1373,26 +1393,34 @@ async function playOnlineAction(act) {
       setQueueHighlight(ev.attacker, ev.target);
 
       if (amOwner()) {
-        // owner: await 게시 → input 대기 → 반응 build(splice) → 업로드
-        await actionRef().child('await').set({
-          index:i, target:ev.target, attacker:ev.attacker, item:ev.item,
-          incoming:ev.incoming, aoe:ev.aoe || false, chain:ev.chain || false
-        });
-        setStatus(`${state.players[ev.target]?.name || '?'}의 응답 대기...`);
-        const choice = await waitForInput(i);
-        const reactEvents = buildReactionEvents(ev.attacker, ev.target, ev.item, ev.incoming, choice, ev.aoe);
-        q.splice(i + 1, 0, ...reactEvents);
-        q[i] = { ...ev, resolved:true };
-        await uploadActionQueue(q);
-      } else {
-        // spectator: 내가 target이면 모달 → input 기록. 그 후 owner가 resolve할 때까지 대기
-        if (ev.target === myUid) {
-          const reactions = getReactionCards(myUid).filter(o => CARD_DEFS[o.k]?.type === 'DEF'); // Stage1: DEF만
-          openDefenseModal(ev.attacker, myUid, ev.item, ev.incoming, reactions,
-            choice => submitOnlineInput(i, choice));
+        // 안전 상한: 연쇄 20회 초과 시 owner가 입력 안 받고 강제 맞기를 baking
+        if (ev.chain && chainCount >= 20) {
+          const forced = [
+            { kind:'react', text:'⛔ 연쇄 종료!<br><small>강제 맞기</small>',
+              log:'연쇄 상한(20) 도달 — 강제 맞기', logKind:'sys', stageCls:'miss' },
+            { kind:'damage', target:ev.target, amount:ev.incoming, label:'연쇄 종료' }
+          ];
+          q.splice(i + 1, 0, ...forced);
+          q[i] = { ...ev, resolved:true };
+          await uploadActionQueue(q);
         } else {
+          if (ev.chain) chainCount++;
+          // owner: await 게시 → input 대기 → 반응 build(splice) → 업로드.
+          // 모달 표시는 watchAwait(상설 리스너)가 담당 → owner가 target이어도 deadlock 없음.
+          await actionRef().child('await').set({
+            index:i, target:ev.target, attacker:ev.attacker, item:ev.item,
+            incoming:ev.incoming, aoe:ev.aoe || false, chain:ev.chain || false
+          });
           setStatus(`${state.players[ev.target]?.name || '?'}의 응답 대기...`);
+          const choice = await waitForInput(i);
+          const reactEvents = buildReactionEvents(ev.attacker, ev.target, ev.item, ev.incoming, choice, ev.aoe);
+          q.splice(i + 1, 0, ...reactEvents);
+          q[i] = { ...ev, resolved:true };
+          await uploadActionQueue(q);
         }
+      } else {
+        // spectator: 모달은 watchAwait가 띄움. 여기선 owner의 resolve만 대기.
+        setStatus(`${state.players[ev.target]?.name || '?'}의 응답 대기...`);
         q = await waitForResolved(i);
       }
       i++; continue;
