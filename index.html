@@ -34,10 +34,12 @@
   .waiting-player{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
   .players{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
   .pl{background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:14px;transition:.2s;position:relative}
-  .pl.active-turn{border-color:var(--gold);box-shadow:0 0 16px rgba(232,184,75,.3)}
+  .pl.active-turn{border-color:var(--gold);box-shadow:0 0 0 2px var(--gold),0 0 22px rgba(232,184,75,.55)}
   .pl.dead{opacity:.35;filter:grayscale(1)}
   .pl.targetable{border-color:var(--red);cursor:pointer;box-shadow:0 0 14px rgba(214,84,63,.4)}
   .pl.targetable:hover{transform:translateY(-3px);box-shadow:0 0 22px rgba(214,84,63,.7)}
+  /* 큐 재생 중 피격자 강조 */
+  .pl.targeted{border-color:var(--red);box-shadow:0 0 12px rgba(214,84,63,.35)}
   .pl .nm{font-family:'Black Han Sans';font-size:1.3rem}
   .pl .you{color:var(--blue)}.pl .ai{color:var(--red)}
   .pl .char-tag{font-size:.75rem;color:var(--muted);margin:2px 0 8px}
@@ -849,6 +851,22 @@ function applyDamage(targetId, dmg, sourceId, label) {
 // ── 이벤트 큐 + 재생기 (기획 12장) ────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ── 큐 재생 중 공격자/피격자 강조 ──────────────────────────────
+let queueHighlight = { attacker: null, targeted: null };
+
+function setQueueHighlight(attacker, targeted) {
+  queueHighlight.attacker = attacker;
+  queueHighlight.targeted = targeted;
+  // render() 호출 없이 즉시 DOM 패치
+  if (!state?.turnOrder) return;
+  state.turnOrder.forEach(id => {
+    const el = document.getElementById('pl-' + id);
+    if (!el) return;
+    el.classList.toggle('active-turn', id === attacker);
+    el.classList.toggle('targeted',    id === targeted);
+  });
+}
+
 // 단일 ATK 한 건 → 이벤트 배열 (계산만, 실제 적용은 재생기에서 박자별로)
 function buildAtkQueue(attackerId, targetId, key) {
   const def = CARD_DEFS[key];
@@ -1088,6 +1106,8 @@ async function playQueue(q, onDone) {
     // ── announce ──────────────────────────────────────────────
     } else if (ev.kind === 'announce') {
       const a = state.players[ev.actor];
+      // 공격자 강조 (ALL은 피격자 미정이므로 null, 단일은 즉시 표시)
+      setQueueHighlight(ev.actor, ev.aoe ? null : ev.target || null);
       if (ev.aoe) {
         showStageLeft(`<span class="s-card">${cardIcon(ev.card)}</span>${CARD_DEFS[ev.card].name}!<br><small>${a.name}의 전체공격</small>`, 'aoe');
         setStatus(`${a.name}의 턴`);
@@ -1105,9 +1125,11 @@ async function playQueue(q, onDone) {
       if (ev.aoe) {
         // ALL: 중앙에 명중/빗나감 (대응 카드가 오면 덮어씀)
         if (ev.hit) {
+          setQueueHighlight(queueHighlight.attacker, ev.target);  // 피격자 강조
           showStageCenter('🎯 명중!', 'atk');
           await sleep(500);
         } else {
+          setQueueHighlight(queueHighlight.attacker, null);
           showStageCenter(`<span class="s-card">💨</span>빗나감!<br><small>${state.players[ev.target].name}</small>`, 'miss');
           pushLog(`${CARD_DEFS[ev.card].name} → ${state.players[ev.target].name} 빗나감!`, 'miss');
           render(); await sleep(800);
@@ -1115,6 +1137,7 @@ async function playQueue(q, onDone) {
       } else {
         // 단일 ATK: 빗나감만 오른쪽에 표시
         if (!ev.hit) {
+          setQueueHighlight(queueHighlight.attacker, null);
           showStageRight(`<span class="s-card">💨</span>빗나감!<br><small>${state.players[ev.target].name}</small>`, 'miss');
           pushLog(`${CARD_DEFS[ev.card].name} → ${state.players[ev.target].name} 빗나감!`, 'miss');
           render(); await sleep(800);
@@ -1123,6 +1146,8 @@ async function playQueue(q, onDone) {
 
     // ── askDefense ────────────────────────────────────────────
     } else if (ev.kind === 'askDefense') {
+      // 피격자 강조 갱신 (연쇄 시 공수 역전 반영)
+      setQueueHighlight(ev.attacker, ev.target);
       // 안전 상한: 연쇄가 20회를 넘으면 강제 맞기
       if (ev.chain && chainCount >= 20) {
         showStageCenter('⛔ 연쇄 종료!', 'miss');
@@ -1156,6 +1181,7 @@ async function playQueue(q, onDone) {
 
     // ── clearCR ───────────────────────────────────────────────
     } else if (ev.kind === 'clearCR') {
+      setQueueHighlight(queueHighlight.attacker, null);  // 피격자 강조 해제 (다음 대상으로)
       clearCenterRight();
       await sleep(250);
 
@@ -1195,6 +1221,7 @@ async function playQueue(q, onDone) {
       }
       const fromName = state.players[ev.from]?.name || '?';
       const toName   = state.players[ev.to]?.name   || '?';
+      setQueueHighlight(ev.from, ev.to);   // 공수 역전 강조
       showStageLeft(`${fromName} → ${toName}<br><small>${ev.label} 데미지 ${ev.amount}</small>`, 'atk');
       await sleep(700);
 
@@ -1207,7 +1234,8 @@ async function playQueue(q, onDone) {
     }
   }
 
-  // ── 연쇄 완전 종료 후 전원 손패 보충 (v8) ─────────────────
+  // ── 행동 종료: 강조 해제 후 손패 일괄 보충 (v8) ─────────────
+  queueHighlight = { attacker: null, targeted: null };
   state.turnOrder.forEach(id => {
     const p = state.players[id];
     if (!p.alive) return;
@@ -1286,7 +1314,11 @@ function render() {
     if (!p) return;
     const isTargetable = targeting && id !== myId && p.alive;
     let cls = 'pl';
-    if (id === curId && p.alive) cls += ' active-turn';
+    const isAct = isPlaying
+      ? id === queueHighlight.attacker
+      : (id === curId && p.alive);
+    if (isAct) cls += ' active-turn';
+    if (isPlaying && id === queueHighlight.targeted) cls += ' targeted';
     if (!p.alive) cls += ' dead';
     if (isTargetable) cls += ' targetable';
     const div = document.createElement('div');
