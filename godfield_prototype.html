@@ -142,7 +142,7 @@
     <div class="hand-label">내 손패 — 카드를 눌러 사용</div>
     <div class="hand" id="handBox"></div>
     <div class="center" style="margin-top:12px">
-      <button id="passBtn" class="btn secondary">패스 (카드 1장 버림)</button>
+      <button id="passBtn" class="btn secondary">패스 (카드 1장 획득)</button>
     </div>
     <div class="log" id="logBox"></div>
   </section>
@@ -275,9 +275,6 @@ function beginTurn(){
   const cur = state.turnOrder[state.currentTurnIndex];
   if(!state.players[cur].alive){ nextTurn(); return; }
 
-  const p = state.players[cur];
-  if(p.hand.length < CONFIG.maxHand) p.hand.push(drawCard());
-
   pendingCardUse = null;
   render();
   if(cur==="you"){
@@ -328,6 +325,7 @@ function useCard(handIdx){
   }
   // HEAL, ALL: 타겟 불필요
   me.hand.splice(handIdx, 1);
+  me.hand.push(drawCard());
   resolveMyTurnCard("you", null, key);
 }
 
@@ -337,6 +335,7 @@ function selectTarget(targetId){
   const { handIdx, key } = pendingCardUse;
   pendingCardUse = null;
   state.players.you.hand.splice(handIdx, 1);
+  state.players.you.hand.push(drawCard());
   resolveMyTurnCard("you", targetId, key);
 }
 
@@ -350,8 +349,8 @@ document.getElementById('passBtn').onclick = ()=>{
   if(state.turnOrder[state.currentTurnIndex]!=="you") return;
   if(pendingCardUse){ cancelTargeting(); return; }
   const me = state.players.you;
-  if(me.hand.length>0) me.hand.pop();
-  pushLog("나는 패스했다.", 'sys');
+  me.hand.push(drawCard());
+  pushLog("나는 패스했다. (카드 1장 획득)", 'sys');
   render();
   setTimeout(nextTurn, 500);
 };
@@ -518,14 +517,15 @@ function aiTurn(){
     .filter(o=>TYPE_TIMING[CARD_DEFS[o.k].type]==="MyTurn");
 
   if(playable.length===0){
-    if(ai.hand.length>0) ai.hand.pop();
-    pushLog(`${ai.name}은 패스했다.`, 'sys');
+    ai.hand.push(drawCard());
+    pushLog(`${ai.name}은 패스했다. (카드 1장 획득)`, 'sys');
     render(); setTimeout(nextTurn,500); return;
   }
 
   const pick = playable[Math.floor(Math.random()*playable.length)];
   const idx = ai.hand.indexOf(pick.k);
   ai.hand.splice(idx,1);
+  ai.hand.push(drawCard());
 
   // 타겟 선택: 살아있는 다른 플레이어 중 랜덤
   const def = CARD_DEFS[pick.k];
