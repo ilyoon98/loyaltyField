@@ -405,6 +405,7 @@ async function createRoom() {
     if (!snap.exists()) break;
   }
   roomId = code; isHost = true;
+  gameMode = 'online';
   await db.ref('rooms/' + roomId).set({
     host: myUid, phase:'waiting',
     players: { [myUid]: { name:myName, characterId:null } }
@@ -426,6 +427,7 @@ async function joinRoom() {
   if (data.phase !== 'waiting') { setLobbyError('이미 게임이 시작된 방입니다'); return; }
   if (Object.keys(data.players || {}).length >= 4) { setLobbyError('방이 가득 찼습니다 (최대 4명)'); return; }
   roomId = code; isHost = data.host === myUid;
+  gameMode = 'online';
   await db.ref('rooms/' + roomId + '/players/' + myUid).set({ name:myName, characterId:null });
   listenRoom();
   showScreen('waiting');
