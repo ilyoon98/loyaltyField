@@ -648,15 +648,21 @@ function resolveMyTurnCard(attackerId, targetId, key) {
   }
 
   if (def.type === 'ALL') {
-    const targets = state.turnOrder.filter(id => id !== attackerId && state.players[id].alive);
-    const prob = effProb(key, atkChar);
-    targets.forEach(tid => {
-      if (rollHit(prob)) applyDamage(tid, def.value, attackerId, def.name);
-      else pushLog(`${def.name} → ${state.players[tid].name} 빗나감!`, 'miss');
-    });
-    render();
-    if (gameMode === 'online') { if (!checkWinOnline()) syncOnline().then(() => onlineNextTurn()); }
-    else finishAction(attackerId);
+    if (gameMode === 'online') {
+      // 온라인: 기존 즉시처리 유지 (큐 통일은 온라인 단계에서)
+      const targets = state.turnOrder.filter(id => id !== attackerId && state.players[id].alive);
+      const prob = effProb(key, atkChar);
+      targets.forEach(tid => {
+        if (rollHit(prob)) applyDamage(tid, def.value, attackerId, def.name);
+        else pushLog(`${def.name} → ${state.players[tid].name} 빗나감!`, 'miss');
+      });
+      render();
+      if (!checkWinOnline()) syncOnline().then(() => onlineNextTurn());
+      return;
+    }
+    // 로컬: 대상별 단계 재생 (기획 12-3)
+    const q = buildAllQueue(attackerId, key);
+    playQueue(q, () => { if (!checkWin()) setTimeout(nextTurn, 400); });
     return;
   }
 
@@ -688,10 +694,15 @@ function resolveMyTurnCard(attackerId, targetId, key) {
 }
 
 // ── 피격 반응 ────────────────────────────────────────────────
-function getReactionCards(playerId) {
+function getReactionCards(playerId, aoe) {
   return toArr(state.players[playerId].hand)
     .map((k,i) => ({k,i}))
-    .filter(o => TYPE_TIMING[CARD_DEFS[o.k]?.type] === 'OnHit');
+    .filter(o => {
+      const t = CARD_DEFS[o.k]?.type;
+      if (TYPE_TIMING[t] !== 'OnHit') return false;
+      if (aoe && t !== 'DEF') return false;   // 전체공격엔 방어(DEF)만 (기획 11-2)
+      return true;
+    });
 }
 
 function offerReaction(attackerId, targetId, atkKey, dmg) {
@@ -806,6 +817,21 @@ function buildAtkQueue(attackerId, targetId, key) {
   return q;
 }
 
+// 전체공격(ALL) → 대상별 단계 이벤트 (기획 12-3: 대상마다 명중판정 + 방어 기회)
+// 한꺼번에 처리하지 않고 대상 하나씩 꺼내 hitcheck→askDefense(DEF/맞기만)→damage.
+function buildAllQueue(attackerId, key) {
+  const def = CARD_DEFS[key];
+  const atkChar = state.players[attackerId].characterId;
+  const q = [{ kind:'announce', actor:attackerId, card:key, aoe:true }];
+  const targets = state.turnOrder.filter(id => id !== attackerId && state.players[id].alive);
+  targets.forEach(tid => {
+    const hit = rollHit(effProb(key, atkChar));
+    q.push({ kind:'hitcheck', target:tid, card:key, hit });
+    if (hit) q.push({ kind:'askDefense', attacker:attackerId, target:tid, item:key, incoming:def.value, aoe:true });
+  });
+  return q;
+}
+
 // 피격자 응답 → 후속 이벤트(연출+데미지). 반응 카드 소모는 이 시점에 처리.
 function buildReactionEvents(attackerId, targetId, atkKey, dmg, choice) {
   const evs = [];
@@ -842,9 +868,9 @@ function buildReactionEvents(attackerId, targetId, atkKey, dmg, choice) {
 }
 
 // 피격자에게 방어/반사/바운스/맞기 입력 요청 → choice 반환 (Promise)
-function askDefense(attackerId, targetId, atkKey, dmg) {
+function askDefense(attackerId, targetId, atkKey, dmg, aoe) {
   return new Promise(resolve => {
-    const reactions = getReactionCards(targetId);
+    const reactions = getReactionCards(targetId, aoe);
     if (targetId === myPlayerId()) {
       openDefenseModal(attackerId, targetId, atkKey, dmg, reactions, resolve);
     } else {
@@ -899,9 +925,15 @@ async function playQueue(q, onDone) {
       pushLog(`${p.name}: ${CARD_DEFS[ev.card].name} 효과로 HP ${ev.amount} 회복`, 'heal');
       render(); await sleep(700);
     } else if (ev.kind === 'announce') {
-      const a = state.players[ev.actor], t = state.players[ev.target];
-      setStatus(`⚔ ${a.name} → ${t.name} : ${CARD_DEFS[ev.card].name}!`);
-      pushLog(`${a.name} → ${t.name}에게 ${CARD_DEFS[ev.card].name} 공격!`, 'sys');
+      const a = state.players[ev.actor];
+      if (ev.aoe) {
+        setStatus(`💥 ${a.name} : ${CARD_DEFS[ev.card].name}! (전체공격)`);
+        pushLog(`${a.name}: ${CARD_DEFS[ev.card].name} 전체공격!`, 'sys');
+      } else {
+        const t = state.players[ev.target];
+        setStatus(`⚔ ${a.name} → ${t.name} : ${CARD_DEFS[ev.card].name}!`);
+        pushLog(`${a.name} → ${t.name}에게 ${CARD_DEFS[ev.card].name} 공격!`, 'sys');
+      }
       render(); await sleep(900);
     } else if (ev.kind === 'hitcheck') {
       if (!ev.hit) {
@@ -911,7 +943,7 @@ async function playQueue(q, onDone) {
       }
     } else if (ev.kind === 'askDefense') {
       setStatus(`${state.players[ev.target].name}의 응답을 기다리는 중...`);
-      const choice = await askDefense(ev.attacker, ev.target, ev.item, ev.incoming);
+      const choice = await askDefense(ev.attacker, ev.target, ev.item, ev.incoming, ev.aoe);
       const reactEvents = buildReactionEvents(ev.attacker, ev.target, ev.item, ev.incoming, choice);
       q.splice(i + 1, 0, ...reactEvents);
     } else if (ev.kind === 'react') {
