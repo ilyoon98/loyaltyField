@@ -244,6 +244,7 @@ let gameMode = 'local';
 let state = null;
 let selectedChar = null;
 let pendingCardUse = null;
+let isPlaying = false;   // 큐 재생 중이면 입력 잠금 (기획 12-4)
 
 // 온라인 전용
 let myUid = sessionStorage.getItem('euri_uid') || (() => {
@@ -583,6 +584,7 @@ function nextTurn() {
 function myPlayerId() { return gameMode === 'online' ? myUid : 'you'; }
 
 function useCard(handIdx) {
+  if (isPlaying) return;
   const myId = myPlayerId();
   if (state.turnOrder[state.currentTurnIndex] !== myId) return;
   if (pendingCardUse) return;
@@ -601,6 +603,7 @@ function useCard(handIdx) {
 }
 
 function selectTarget(targetId) {
+  if (isPlaying) return;
   if (!pendingCardUse) return;
   const myId = myPlayerId();
   if (targetId === myId || !state.players[targetId].alive) return;
@@ -618,6 +621,7 @@ function cancelTargeting() {
 }
 
 document.getElementById('passBtn').onclick = () => {
+  if (isPlaying) return;
   const myId = myPlayerId();
   if (!state || state.turnOrder[state.currentTurnIndex] !== myId) return;
   if (pendingCardUse) { cancelTargeting(); return; }
@@ -657,26 +661,29 @@ function resolveMyTurnCard(attackerId, targetId, key) {
   }
 
   if (def.type === 'ATK') {
-    const prob = effProb(key, atkChar);
-    if (def.trigger === atkChar && def.plusType === 'HEAL') {
-      state.players[attackerId].hp = Math.min(CONFIG.startHp, state.players[attackerId].hp + def.plusValue);
-      pushLog(`${state.players[attackerId].name}: ${def.name} 효과로 HP ${def.plusValue} 회복`, 'heal');
-    }
-    if (!rollHit(prob)) {
-      pushLog(`${state.players[attackerId].name}의 ${def.name} → 빗나감!`, 'miss');
-      render();
-      if (gameMode === 'online') syncOnline().then(() => onlineNextTurn());
-      else finishAction(attackerId);
-      return;
-    }
     if (gameMode === 'online') {
+      // 온라인: 기존 pendingAction 경로 유지 (12장 큐는 로컬만)
+      const prob = effProb(key, atkChar);
+      if (def.trigger === atkChar && def.plusType === 'HEAL') {
+        state.players[attackerId].hp = Math.min(CONFIG.startHp, state.players[attackerId].hp + def.plusValue);
+        pushLog(`${state.players[attackerId].name}: ${def.name} 효과로 HP ${def.plusValue} 회복`, 'heal');
+      }
+      if (!rollHit(prob)) {
+        pushLog(`${state.players[attackerId].name}의 ${def.name} → 빗나감!`, 'miss');
+        render();
+        syncOnline().then(() => onlineNextTurn());
+        return;
+      }
       state.pendingAction = { attacker:attackerId, target:targetId, item:key, damage:def.value, type:'single' };
       pushLog(`${state.players[attackerId].name} → ${state.players[targetId].name}에게 ${def.name} 공격!`, 'sys');
       render();
       syncOnline();
-    } else {
-      offerReaction(attackerId, targetId, key, def.value);
+      return;
     }
+    // 로컬: 이벤트 큐 생성 후 재생 (기획 12-1)
+    const q = buildAtkQueue(attackerId, targetId, key);
+    playQueue(q, () => { if (!checkWin()) setTimeout(nextTurn, 400); });
+    return;
   }
 }
 
@@ -781,6 +788,146 @@ function applyDamage(targetId, dmg, sourceId, label) {
   if (p.hp <= 0) { p.hp = 0; p.alive = false; pushLog(`💀 ${p.name} 탈락!`, 'sys'); }
 }
 
+// ── 이벤트 큐 + 재생기 (기획 12장) ────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// 단일 ATK 한 건 → 이벤트 배열 (계산만, 실제 적용은 재생기에서 박자별로)
+function buildAtkQueue(attackerId, targetId, key) {
+  const def = CARD_DEFS[key];
+  const atkChar = state.players[attackerId].characterId;
+  const q = [];
+  // 프로틴 등: 공격 시 자기 회복 (명중 여부와 무관)
+  if (def.trigger === atkChar && def.plusType === 'HEAL')
+    q.push({ kind:'selfheal', target:attackerId, amount:def.plusValue, card:key });
+  q.push({ kind:'announce', actor:attackerId, target:targetId, card:key });
+  const hit = rollHit(effProb(key, atkChar));
+  q.push({ kind:'hitcheck', target:targetId, card:key, hit });
+  if (hit) q.push({ kind:'askDefense', attacker:attackerId, target:targetId, item:key, incoming:def.value });
+  return q;
+}
+
+// 피격자 응답 → 후속 이벤트(연출+데미지). 반응 카드 소모는 이 시점에 처리.
+function buildReactionEvents(attackerId, targetId, atkKey, dmg, choice) {
+  const evs = [];
+  const tName = state.players[targetId].name;
+  if (choice === 'take') {
+    evs.push({ kind:'react', text:`${tName}, 그냥 맞기`, log:`${tName} 그냥 맞기`, logKind:'sys' });
+    evs.push({ kind:'damage', target:targetId, amount:dmg, label:CARD_DEFS[atkKey].name });
+    return evs;
+  }
+  const tHand = state.players[targetId].hand;
+  const idx = tHand.indexOf(choice.k);
+  if (idx >= 0) { tHand.splice(idx, 1); tHand.push(drawCard()); }
+  const rDef = CARD_DEFS[choice.k];
+  const tChar = state.players[targetId].characterId;
+  if (rDef.type === 'DEF') {
+    const reduce = effValue(choice.k, tChar);
+    const final = Math.max(0, dmg - reduce);
+    evs.push({ kind:'react', text:`🛡 ${tName} 막음! (−${reduce})`, log:`${tName}: ${rDef.name}으로 방어 (−${reduce}) → ${final} 피해`, logKind:'block' });
+    if (final > 0) evs.push({ kind:'damage', target:targetId, amount:final, label:'관통' });
+  } else if (rDef.type === 'REFLECT') {
+    evs.push({ kind:'react', text:`🔄 ${tName} 반사!`, log:`${tName}: ${rDef.name}! 공격자에게 ${dmg} 반사`, logKind:'ref' });
+    evs.push({ kind:'damage', target:attackerId, amount:dmg, label:'반사' });
+  } else if (rDef.type === 'Bounce') {
+    let nT = 1;
+    if (rDef.trigger === tChar && rDef.plusType === 'Target') nT += rDef.plusValue;
+    const alive = state.turnOrder.filter(id => state.players[id].alive);
+    evs.push({ kind:'react', text:`💥 ${tName} 떠넘김! (${nT}명)`, log:`${tName}: ${rDef.name}! ${dmg} 데미지를 랜덤 ${nT}명에게 떠넘김`, logKind:'ref' });
+    for (let n = 0; n < nT; n++) {
+      const victim = alive[Math.floor(Math.random() * alive.length)];
+      evs.push({ kind:'damage', target:victim, amount:dmg, label:'떠넘김' });
+    }
+  }
+  return evs;
+}
+
+// 피격자에게 방어/반사/바운스/맞기 입력 요청 → choice 반환 (Promise)
+function askDefense(attackerId, targetId, atkKey, dmg) {
+  return new Promise(resolve => {
+    const reactions = getReactionCards(targetId);
+    if (targetId === myPlayerId()) {
+      openDefenseModal(attackerId, targetId, atkKey, dmg, reactions, resolve);
+    } else {
+      let choice = 'take';
+      if (reactions.length > 0 && Math.random() < 0.5)
+        choice = reactions[Math.floor(Math.random() * reactions.length)];
+      setTimeout(() => resolve(choice), 500);
+    }
+  });
+}
+
+// 큐 전용 방어 모달 (선택 결과를 resolve로 넘김. 온라인용 openReactModal과 별개)
+function openDefenseModal(attackerId, targetId, atkKey, dmg, reactions, resolve) {
+  document.getElementById('reactDesc').textContent =
+    `${state.players[attackerId].name}의 ${CARD_DEFS[atkKey].name} — ${dmg} 데미지가 들어옵니다!`;
+  const box = document.getElementById('reactCards');
+  box.innerHTML = '';
+  const pick = (choice) => { closeReactModal(); resolve(choice); };
+
+  const takeBtn = document.createElement('div');
+  takeBtn.className = 'react-opt';
+  takeBtn.innerHTML = `<b>그냥 맞기</b> — HP ${dmg} 감소`;
+  takeBtn.onclick = () => pick('take');
+  box.appendChild(takeBtn);
+
+  reactions.forEach(o => {
+    const d = CARD_DEFS[o.k];
+    const tChar = state.players[targetId].characterId;
+    const btn = document.createElement('div');
+    btn.className = 'react-opt';
+    let label = `<b>${d.name}</b> (${d.type}) — `;
+    if (d.type === 'DEF')     label += `데미지 ${effValue(o.k, tChar)} 경감`;
+    if (d.type === 'REFLECT') label += `공격자에게 그대로 반사`;
+    if (d.type === 'Bounce')  label += `랜덤 대상에게 떠넘김`;
+    btn.innerHTML = label;
+    btn.onclick = () => pick(o);
+    box.appendChild(btn);
+  });
+
+  document.getElementById('reactOverlay').classList.add('active');
+}
+
+// 재생기: 큐를 한 박자씩 소비. askDefense에서 멈춰 입력받고 후속 이벤트를 큐에 이어붙임.
+async function playQueue(q, onDone) {
+  isPlaying = true;
+  render();
+  for (let i = 0; i < q.length; i++) {
+    const ev = q[i];
+    if (ev.kind === 'selfheal') {
+      const p = state.players[ev.target];
+      p.hp = Math.min(CONFIG.startHp, p.hp + ev.amount);
+      pushLog(`${p.name}: ${CARD_DEFS[ev.card].name} 효과로 HP ${ev.amount} 회복`, 'heal');
+      render(); await sleep(700);
+    } else if (ev.kind === 'announce') {
+      const a = state.players[ev.actor], t = state.players[ev.target];
+      setStatus(`⚔ ${a.name} → ${t.name} : ${CARD_DEFS[ev.card].name}!`);
+      pushLog(`${a.name} → ${t.name}에게 ${CARD_DEFS[ev.card].name} 공격!`, 'sys');
+      render(); await sleep(900);
+    } else if (ev.kind === 'hitcheck') {
+      if (!ev.hit) {
+        setStatus('빗나감!');
+        pushLog(`${CARD_DEFS[ev.card].name} → ${state.players[ev.target].name} 빗나감!`, 'miss');
+        render(); await sleep(800);
+      }
+    } else if (ev.kind === 'askDefense') {
+      setStatus(`${state.players[ev.target].name}의 응답을 기다리는 중...`);
+      const choice = await askDefense(ev.attacker, ev.target, ev.item, ev.incoming);
+      const reactEvents = buildReactionEvents(ev.attacker, ev.target, ev.item, ev.incoming, choice);
+      q.splice(i + 1, 0, ...reactEvents);
+    } else if (ev.kind === 'react') {
+      setStatus(ev.text);
+      pushLog(ev.log, ev.logKind);
+      render(); await sleep(800);
+    } else if (ev.kind === 'damage') {
+      applyDamage(ev.target, ev.amount, null, ev.label);
+      render(); await sleep(800);
+    }
+  }
+  isPlaying = false;
+  render();
+  if (onDone) onDone();
+}
+
 // ── 행동 종료 (로컬) ──────────────────────────────────────────
 function finishAction(actorId) {
   render();
@@ -810,7 +957,7 @@ function aiTurn() {
   if (def.type === 'ATK') {
     const cands = state.turnOrder.filter(id => id !== curId && state.players[id].alive);
     targetId = cands[Math.floor(Math.random()*cands.length)];
-    pushLog(`${ai.name} → ${state.players[targetId].name}을 타겟으로 ${def.name}!`, 'sys');
+    // 공격 로그는 큐의 announce 박자에서 찍는다 (로컬 ATK)
   }
   resolveMyTurnCard(curId, targetId, pick.k);
 }
@@ -879,7 +1026,7 @@ function renderHand() {
   toArr(me.hand).forEach((k, i) => {
     const d = CARD_DEFS[k]; if (!d) return;
     const isMyTurnCard = TYPE_TIMING[d.type] === 'MyTurn';
-    const usable  = myTurn && isMyTurnCard && !targeting;
+    const usable  = myTurn && isMyTurnCard && !targeting && !isPlaying;
     const pending = targeting && pendingCardUse.handIdx === i;
     const div = document.createElement('div');
     div.className = 'card' + (usable||pending?'':' disabled') + (pending?' active-turn':'');
