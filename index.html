@@ -275,6 +275,7 @@ function beginTurn(){
   const cur = state.turnOrder[state.currentTurnIndex];
   if(!state.players[cur].alive){ nextTurn(); return; }
 
+  const p = state.players[cur];
   pendingCardUse = null;
   render();
   if(cur==="you"){
