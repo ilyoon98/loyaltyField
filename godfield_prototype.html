@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.2</title>
+<title>으리챗 난투전 — 프로토타입 v0.3</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
 
@@ -123,7 +123,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p>프로토타입 v0.2 · 나 vs AI 3명 · 4인 난투 로컬 검증용</p>
+    <p>프로토타입 v0.3 · 나 vs AI 3명 · 4인 난투 로컬 검증용</p>
   </header>
 
   <!-- 캐릭터 선택 화면 -->
@@ -168,7 +168,7 @@
 
 <script>
 /* =========================================================
-   으리챗 난투전 — 로컬 프로토타입 v0.2 (4인 난투)
+   으리챗 난투전 — 로컬 프로토타입 v0.3 (4인 난투)
    기획서 5장 game state 구조를 그대로 따른다.
    이 state 객체를 나중에 Firebase에 올리면 온라인 전환.
    ========================================================= */
@@ -457,7 +457,7 @@ function applyReaction(attackerId, targetId, atkKey, dmg, choice){
 
   const tHand = state.players[targetId].hand;
   const idx = tHand.indexOf(choice.k);
-  if(idx>=0) tHand.splice(idx,1);
+  if(idx>=0){ tHand.splice(idx,1); tHand.push(drawCard()); }
   const rDef = CARD_DEFS[choice.k];
   const tChar = state.players[targetId].characterId;
 
