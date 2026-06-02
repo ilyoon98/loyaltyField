@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.5</title>
+<title>으리챗 난투전 — 프로토타입 v0.6</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -66,6 +66,14 @@
   .modal .react-cards{display:flex;flex-direction:column;gap:8px}
   .react-opt{background:var(--panel-light);border:1px solid var(--line);border-radius:8px;padding:12px;cursor:pointer;transition:.15s;text-align:left}
   .react-opt:hover{border-color:var(--gold)}
+  .react-opt.selected{border-color:var(--blue);background:rgba(100,160,255,.15)}
+  .def-tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .def-tab{flex:1;padding:8px 4px;border:1px solid var(--line);border-radius:8px;background:var(--panel-light);color:var(--ink);font-family:'Black Han Sans';font-size:.85rem;cursor:pointer;transition:.15s;white-space:nowrap}
+  .def-tab:hover{border-color:var(--gold)}
+  .def-tab.active{border-color:var(--gold);color:var(--gold);background:rgba(255,200,50,.1)}
+  .def-summary{color:var(--muted);font-size:.82rem;text-align:center;margin:6px 0;font-family:'Gowun Dodum'}
+  .def-confirm{width:100%;margin-top:6px;padding:10px;background:var(--gold);color:#111;border:none;border-radius:8px;font-family:'Black Han Sans';font-size:1rem;cursor:pointer;transition:.15s}
+  .def-confirm:hover{filter:brightness(1.1)}
   .status{text-align:center;padding:6px;color:var(--muted);font-family:'Black Han Sans';font-size:.95rem;min-height:1.4em}
   /* 3구역 연출 레이어 (기획 12-5 v7) */
   .stage3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;min-height:110px;margin:4px 0 14px;align-items:stretch}
@@ -121,7 +129,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.5</p>
+    <p id="headerSub">프로토타입 v0.6</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -642,7 +650,7 @@ function useCard(handIdx) {
     render(); return;
   }
   me.hand.splice(handIdx, 1);
-  me.hand.push(drawCard());
+  // 보충 없음 — 연쇄 종료 후 일괄 보충 (v8)
   resolveMyTurnCard(myId, null, key);
 }
 
@@ -654,7 +662,7 @@ function selectTarget(targetId) {
   const { handIdx, key } = pendingCardUse;
   pendingCardUse = null;
   state.players[myId].hand.splice(handIdx, 1);
-  state.players[myId].hand.push(drawCard());
+  // 보충 없음 — 연쇄 종료 후 일괄 보충 (v8)
   resolveMyTurnCard(myId, targetId, key);
 }
 
@@ -741,12 +749,7 @@ function resolveMyTurnCard(attackerId, targetId, key) {
 function getReactionCards(playerId, aoe) {
   return toArr(state.players[playerId].hand)
     .map((k,i) => ({k,i}))
-    .filter(o => {
-      const t = CARD_DEFS[o.k]?.type;
-      if (TYPE_TIMING[t] !== 'OnHit') return false;
-      if (aoe && t !== 'DEF') return false;   // 전체공격엔 방어(DEF)만 (기획 11-2)
-      return true;
-    });
+    .filter(o => TYPE_TIMING[CARD_DEFS[o.k]?.type] === 'OnHit');
 }
 
 function offerReaction(attackerId, targetId, atkKey, dmg) {
@@ -871,50 +874,85 @@ function buildAllQueue(attackerId, key) {
   targets.forEach((tid, idx) => {
     if (idx > 0) q.push({ kind:'clearCR' });
     const hit = rollHit(effProb(key, atkChar));
-    q.push({ kind:'hitcheck', target:tid, card:key, hit });
+    q.push({ kind:'hitcheck', target:tid, card:key, hit, aoe:true });
     if (hit) q.push({ kind:'askDefense', attacker:attackerId, target:tid, item:key, incoming:def.value, aoe:true });
   });
   return q;
 }
 
-// 피격자 응답 → 후속 이벤트(연출+데미지). 반응 카드 소모는 이 시점에 처리.
+// 피격자 응답 → 후속 이벤트(연출+데미지). 반응 카드 소모는 이 시점에 처리. (v8: 연쇄 허용)
 function buildReactionEvents(attackerId, targetId, atkKey, dmg, choice, aoe) {
-  const evs = [];
+  const evs  = [];
   const tName = state.players[targetId].name;
+  const tHand = state.players[targetId].hand;
+  const tChar = state.players[targetId].characterId;
+
+  // ── 그냥 맞기 ──────────────────────────────────────────────
   if (choice === 'take') {
-    evs.push({ kind:'react', text:`😣 ${tName}, 그냥 맞기`, log:`${tName} 그냥 맞기`, logKind:'sys', stageCls:'' });
-    evs.push({ kind:'damage', target:targetId, amount:dmg, label:CARD_DEFS[atkKey].name });
+    evs.push({ kind:'react', text:`😣 ${tName}, 그냥 맞기`,
+               log:`${tName} 그냥 맞기`, logKind:'sys', stageCls:'' });
+    evs.push({ kind:'damage', target:targetId, amount:dmg,
+               label:CARD_DEFS[atkKey]?.name || '공격' });
     return evs;
   }
-  const tHand = state.players[targetId].hand;
-  const idx = tHand.indexOf(choice.k);
-  if (idx >= 0) { tHand.splice(idx, 1); tHand.push(drawCard()); }
-  const rDef = CARD_DEFS[choice.k];
-  const tChar = state.players[targetId].characterId;
-  if (rDef.type === 'DEF') {
-    const reduce = effValue(choice.k, tChar);
-    const final = Math.max(0, dmg - reduce);
-    evs.push({ kind:'react', text:`🛡 ${tName} 막음!<br><small>−${reduce} 경감</small>`, log:`${tName}: ${rDef.name}으로 방어 (−${reduce}) → ${final} 피해`, logKind:'block', stageCls:'block' });
+
+  // ── 방어(DEF) — 단일(AI)/다중(플레이어) 통합 처리 ──────────
+  // choice.defCards: 다중 DEF 배열 / choice.k + DEF type: 단일 → 배열 정규화
+  const defKeys = choice.defCards
+    ? choice.defCards
+    : (CARD_DEFS[choice.k]?.type === 'DEF' ? [choice.k] : null);
+
+  if (defKeys) {
+    defKeys.forEach(k => { const i = tHand.indexOf(k); if (i >= 0) tHand.splice(i, 1); });
+    // 보충 없음 — 연쇄 종료 후 일괄 보충 (v8)
+    const totalReduce = defKeys.reduce((s, k) => s + effValue(k, tChar), 0);
+    const final = Math.max(0, dmg - totalReduce);
+    const names = defKeys.map(k => CARD_DEFS[k]?.name || k).join('+');
+    evs.push({ kind:'react',
+      text:`🛡 ${tName} 막음!<br><small>−${totalReduce} 경감</small>`,
+      log:`${tName}: ${names} 방어 (−${totalReduce}) → ${final} 피해`,
+      logKind:'block', stageCls:'block' });
     if (final > 0) evs.push({ kind:'damage', target:targetId, amount:final, label:'관통' });
-  } else if (rDef.type === 'REFLECT') {
-    evs.push({ kind:'react', text:`🔄 ${tName} 반사!<br><small>공격자에게 되돌림</small>`, log:`${tName}: ${rDef.name}! 공격자에게 ${dmg} 반사`, logKind:'ref', stageCls:'ref' });
+    return evs;
+  }
+
+  // ── 반사/튕기기 ────────────────────────────────────────────
+  const rKey = choice.k;
+  const rDef = CARD_DEFS[rKey];
+  const ri = tHand.indexOf(rKey);
+  if (ri >= 0) tHand.splice(ri, 1);   // 소모, 보충 없음 (v8)
+
+  if (rDef.type === 'REFLECT') {
+    evs.push({ kind:'react',
+      text:`🔄 ${tName} 반사!<br><small>공격자에게 되돌림</small>`,
+      log:`${tName}: ${rDef.name}! 공격자에게 ${dmg} 반사`, logKind:'ref', stageCls:'ref' });
     evs.push({ kind:'clearAll' });
     evs.push({ kind:'counterAnnounce', from:targetId, to:attackerId, label:'반사', amount:dmg });
-    // askDefense 없음 — 1회 종결
-    evs.push({ kind:'damage', target:attackerId, amount:dmg, label:'반사' });
+    // v8: 1회 종결 폐지 → chain askDefense (incoming:dmg 명시)
+    evs.push({ kind:'askDefense', attacker:targetId, target:attackerId,
+               item:atkKey, incoming:dmg, chain:true, aoe:false });
     evs.push({ kind:'restoreAllAnnounce', actor:attackerId, card:atkKey, aoe:!!aoe });
+
   } else if (rDef.type === 'Bounce') {
     let nT = 1;
     if (rDef.trigger === tChar && rDef.plusType === 'Target') nT += rDef.plusValue;
-    evs.push({ kind:'react', text:`🥋 ${tName} 떠넘김!<br><small>랜덤 ${nT}명에게</small>`, log:`${tName}: ${rDef.name}! ${dmg} 데미지를 랜덤 ${nT}명에게 떠넘김`, logKind:'ref', stageCls:'ref' });
+    evs.push({ kind:'react',
+      text:`🥋 ${tName} 떠넘김!<br><small>랜덤 ${nT}명에게</small>`,
+      log:`${tName}: ${rDef.name}! ${dmg} 데미지를 랜덤 ${nT}명에게 떠넘김`,
+      logKind:'ref', stageCls:'ref' });
     for (let n = 0; n < nT; n++) {
       evs.push({ kind:'clearAll' });
-      // victim은 실행 시점(playQueue)에 생존자 중에서 확정
-      evs.push({ kind:'counterAnnounce', from:targetId, to:null, pickAlive:true, label:'떠넘김', amount:dmg });
-      evs.push({ kind:'damage', target:null, amount:dmg, label:'떠넘김', resolveTarget:true });
+      // victim은 counterAnnounce 핸들러에서 실행 시점 확정
+      evs.push({ kind:'counterAnnounce', from:targetId, to:null,
+                 pickAlive:true, bouncerIs:targetId, label:'떠넘김', amount:dmg });
+      // counterAnnounce가 자기참조면 이걸 damage로 교체; 아니면 target/attacker 주입
+      // incoming:dmg 명시 → 강제 맞기 시 올바른 데미지 보장 (v8 확인사항 1번)
+      evs.push({ kind:'askDefense', attacker:targetId, target:null,
+                 item:atkKey, incoming:dmg, chain:true, resolveTarget:true });
     }
     evs.push({ kind:'restoreAllAnnounce', actor:attackerId, card:atkKey, aoe:!!aoe });
   }
+
   return evs;
 }
 
@@ -933,44 +971,113 @@ function askDefense(attackerId, targetId, atkKey, dmg, aoe) {
   });
 }
 
-// 큐 전용 방어 모달 (선택 결과를 resolve로 넘김. 온라인용 openReactModal과 별개)
+// 큐 전용 방어 모달 — 3-모드 탭 UI (v8: 방어 누적, 연쇄, ALL 반사 허용)
 function openDefenseModal(attackerId, targetId, atkKey, dmg, reactions, resolve) {
+  const tChar = state.players[targetId].characterId;
   document.getElementById('reactDesc').textContent =
-    `${state.players[attackerId].name}의 ${CARD_DEFS[atkKey].name} — ${dmg} 데미지가 들어옵니다!`;
+    `${state.players[attackerId].name}의 ${CARD_DEFS[atkKey]?.name || '공격'} — ${dmg} 데미지!`;
   const box = document.getElementById('reactCards');
   box.innerHTML = '';
   const pick = (choice) => { closeReactModal(); resolve(choice); };
 
-  const takeBtn = document.createElement('div');
-  takeBtn.className = 'react-opt';
-  takeBtn.innerHTML = `<b>그냥 맞기</b> — HP ${dmg} 감소`;
-  takeBtn.onclick = () => pick('take');
-  box.appendChild(takeBtn);
+  const defCards   = reactions.filter(o => CARD_DEFS[o.k]?.type === 'DEF');
+  const reactCards = reactions.filter(o => CARD_DEFS[o.k]?.type !== 'DEF');
+  let selectedDefKeys = [];   // 다중 선택된 방어 카드 key 배열
 
-  reactions.forEach(o => {
-    const d = CARD_DEFS[o.k];
-    const tChar = state.players[targetId].characterId;
-    const btn = document.createElement('div');
-    btn.className = 'react-opt';
-    let label = `<b>${d.name}</b> (${d.type}) — `;
-    if (d.type === 'DEF')     label += `데미지 ${effValue(o.k, tChar)} 경감`;
-    if (d.type === 'REFLECT') label += `공격자에게 그대로 반사`;
-    if (d.type === 'Bounce')  label += `랜덤 대상에게 떠넘김`;
-    btn.innerHTML = label;
-    btn.onclick = () => pick(o);
-    box.appendChild(btn);
-  });
+  // ── 탭 행 ──
+  const tabs = document.createElement('div');
+  tabs.className = 'def-tabs';
+
+  function makeTab(label, onclick) {
+    const t = document.createElement('button');
+    t.className = 'def-tab'; t.textContent = label; t.onclick = onclick;
+    tabs.appendChild(t); return t;
+  }
+
+  const content = document.createElement('div');
+
+  function setMode(mode, activeTab) {
+    tabs.querySelectorAll('.def-tab').forEach(t => t.classList.remove('active'));
+    activeTab.classList.add('active');
+    selectedDefKeys = [];
+    content.innerHTML = '';
+
+    if (mode === 'def') {
+      defCards.forEach(o => {
+        const val = effValue(o.k, tChar);
+        const btn = document.createElement('div');
+        btn.className = 'react-opt';
+        btn.innerHTML = `<b>${CARD_DEFS[o.k].name}</b> — 방어 ${val}`;
+        btn.onclick = () => {
+          const i = selectedDefKeys.indexOf(o.k);
+          if (i >= 0) { selectedDefKeys.splice(i, 1); btn.classList.remove('selected'); }
+          else         { selectedDefKeys.push(o.k);    btn.classList.add('selected'); }
+          updateSummary();
+        };
+        content.appendChild(btn);
+      });
+      const summary = document.createElement('div');
+      summary.className = 'def-summary'; summary.id = 'defSummary';
+      content.appendChild(summary);
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'def-confirm';
+      confirmBtn.textContent = '완료';
+      confirmBtn.onclick = () => {
+        pick(selectedDefKeys.length === 0 ? 'take' : { defCards: selectedDefKeys });
+      };
+      content.appendChild(confirmBtn);
+      updateSummary();
+
+    } else if (mode === 'react') {
+      reactCards.forEach(o => {
+        const d = CARD_DEFS[o.k];
+        const btn = document.createElement('div');
+        btn.className = 'react-opt';
+        btn.innerHTML = `<b>${d.name}</b> — `
+          + (d.type === 'REFLECT' ? '공격자에게 그대로 반사' : '랜덤 대상에게 떠넘김');
+        btn.onclick = () => pick(o);
+        content.appendChild(btn);
+      });
+    }
+  }
+
+  function updateSummary() {
+    const el = document.getElementById('defSummary'); if (!el) return;
+    const total = selectedDefKeys.reduce((s,k) => s + effValue(k, tChar), 0);
+    el.textContent = total > 0
+      ? `합산 방어: −${total} / 남은 데미지: ${Math.max(0, dmg - total)}`
+      : '카드를 선택하세요 (선택 없이 완료 = 그냥 맞기)';
+  }
+
+  if (defCards.length > 0)   { const t = makeTab('🛡 방어', () => setMode('def', t));   }
+  if (reactCards.length > 0) { const t = makeTab('🔄 반사/튕기기', () => setMode('react', t)); }
+  const takeT = makeTab('😣 그냥 맞기', () => pick('take'));
+
+  box.appendChild(tabs);
+  box.appendChild(content);
+
+  // 기본 모드: 방어 카드 있으면 방어, 없으면 맞기 탭 강조
+  if (defCards.length > 0) {
+    setMode('def', tabs.querySelector('.def-tab'));
+  } else if (reactCards.length > 0) {
+    setMode('react', tabs.querySelectorAll('.def-tab')[0]);
+  } else {
+    takeT.classList.add('active');
+  }
 
   document.getElementById('reactOverlay').classList.add('active');
 }
 
-// 재생기: 큐를 한 박자씩 소비 (기획 12장 v7)
+// 재생기: 큐를 한 박자씩 소비 (기획 12장 v8)
 async function playQueue(q, onDone) {
   isPlaying = true;
+  let chainCount = 0;   // 한 행동 내 되받아치기 횟수 (안전 상한 20회)
   render();
+
   for (let i = 0; i < q.length; i++) {
     const ev = q[i];
 
+    // ── selfheal ──────────────────────────────────────────────
     if (ev.kind === 'selfheal') {
       const p = state.players[ev.target];
       p.hp = Math.min(CONFIG.startHp, p.hp + ev.amount);
@@ -978,6 +1085,7 @@ async function playQueue(q, onDone) {
       showStageLeft(`<span class="s-card">${cardIcon(ev.card)}</span>${p.name} HP +${ev.amount}`, 'heal');
       render(); floatNumber(ev.target, ev.amount, true); await sleep(700);
 
+    // ── announce ──────────────────────────────────────────────
     } else if (ev.kind === 'announce') {
       const a = state.players[ev.actor];
       if (ev.aoe) {
@@ -992,60 +1100,97 @@ async function playQueue(q, onDone) {
       }
       render(); await sleep(900);
 
+    // ── hitcheck ──────────────────────────────────────────────
     } else if (ev.kind === 'hitcheck') {
-      if (!ev.hit) {
-        showStageRight(`<span class="s-card">💨</span>빗나감!<br><small>${state.players[ev.target].name}</small>`, 'miss');
-        pushLog(`${CARD_DEFS[ev.card].name} → ${state.players[ev.target].name} 빗나감!`, 'miss');
-        render(); await sleep(800);
+      if (ev.aoe) {
+        // ALL: 중앙에 명중/빗나감 (대응 카드가 오면 덮어씀)
+        if (ev.hit) {
+          showStageCenter('🎯 명중!', 'atk');
+          await sleep(500);
+        } else {
+          showStageCenter(`<span class="s-card">💨</span>빗나감!<br><small>${state.players[ev.target].name}</small>`, 'miss');
+          pushLog(`${CARD_DEFS[ev.card].name} → ${state.players[ev.target].name} 빗나감!`, 'miss');
+          render(); await sleep(800);
+        }
+      } else {
+        // 단일 ATK: 빗나감만 오른쪽에 표시
+        if (!ev.hit) {
+          showStageRight(`<span class="s-card">💨</span>빗나감!<br><small>${state.players[ev.target].name}</small>`, 'miss');
+          pushLog(`${CARD_DEFS[ev.card].name} → ${state.players[ev.target].name} 빗나감!`, 'miss');
+          render(); await sleep(800);
+        }
       }
 
+    // ── askDefense ────────────────────────────────────────────
     } else if (ev.kind === 'askDefense') {
-      setStatus(`${state.players[ev.target].name}의 응답을 기다리는 중...`);
+      // 안전 상한: 연쇄가 20회를 넘으면 강제 맞기
+      if (ev.chain && chainCount >= 20) {
+        showStageCenter('⛔ 연쇄 종료!', 'miss');
+        pushLog('연쇄 상한(20회) 도달 — 강제 맞기', 'sys');
+        await sleep(900);
+        q.splice(i + 1, 0,
+          { kind:'react', text:`😵 강제 맞기`, log:`${state.players[ev.target]?.name} 강제 맞기`, logKind:'sys', stageCls:'' },
+          { kind:'damage', target:ev.target, amount:ev.incoming, label:'연쇄 종료' }
+        );
+        continue;
+      }
+      if (ev.chain) chainCount++;
+
+      setStatus(`${state.players[ev.target]?.name || '?'}의 응답을 기다리는 중...`);
       const choice = await askDefense(ev.attacker, ev.target, ev.item, ev.incoming, ev.aoe);
       const reactEvents = buildReactionEvents(ev.attacker, ev.target, ev.item, ev.incoming, choice, ev.aoe);
       q.splice(i + 1, 0, ...reactEvents);
 
+    // ── react ─────────────────────────────────────────────────
     } else if (ev.kind === 'react') {
       showStageCenter(ev.text, ev.stageCls || '');
-      pushLog(ev.log, ev.logKind);
+      if (ev.log) pushLog(ev.log, ev.logKind);
       render(); await sleep(800);
 
+    // ── damage ────────────────────────────────────────────────
     } else if (ev.kind === 'damage') {
-      // resolveTarget: counterAnnounce가 target을 미리 설정 못 한 경우에만 여기서 확정
-      if (ev.resolveTarget && ev.target == null) {
-        const alive = state.turnOrder.filter(id => state.players[id].alive);
-        if (alive.length === 0) continue;
-        ev.target = alive[Math.floor(Math.random() * alive.length)];
-      }
       if (!state.players[ev.target]?.alive) continue;
       showStageRight(`<span class="big-num">−${ev.amount}</span><br><small>${state.players[ev.target].name} · ${ev.label}</small>`, 'dmg');
       applyDamage(ev.target, ev.amount, null, ev.label);
       render(); floatNumber(ev.target, ev.amount, false); await sleep(800);
 
+    // ── clearCR ───────────────────────────────────────────────
     } else if (ev.kind === 'clearCR') {
       clearCenterRight();
       await sleep(250);
 
+    // ── clearAll ──────────────────────────────────────────────
     } else if (ev.kind === 'clearAll') {
       clearAllZones();
       await sleep(300);
 
+    // ── counterAnnounce ───────────────────────────────────────
     } else if (ev.kind === 'counterAnnounce') {
-      // Bounce: victim을 실행 시점에 생존자 중에서 확정
       if (ev.pickAlive) {
+        // Bounce: 실행 시점에 생존자 중에서 victim 확정
         const alive = state.turnOrder.filter(id => state.players[id].alive);
         if (alive.length === 0) {
-          // 다음 damage 이벤트도 스킵
-          if (q[i + 1]?.resolveTarget) q.splice(i + 1, 1);
+          if (q[i + 1]) q.splice(i + 1, 1);   // 다음 askDefense/damage 제거
           continue;
         }
         ev.to = alive[Math.floor(Math.random() * alive.length)];
-        // 바로 뒤의 damage 이벤트에 target 전달
-        if (q[i + 1]?.resolveTarget) q[i + 1].target = ev.to;
+        const nextEv = q[i + 1];
+        if (nextEv?.resolveTarget) {
+          if (ev.to === ev.bouncerIs) {
+            // 자기 자신에게 튕김 → askDefense를 즉시 damage로 교체 (chainCount 안 오름)
+            q[i + 1] = { kind:'damage', target:ev.to, amount:ev.amount, label:'자기 튕기기' };
+          } else {
+            // askDefense에 victim(target)과 attacker(bouncer) 주입
+            nextEv.target   = ev.to;
+            nextEv.attacker = ev.from;
+          }
+        }
       }
-      // 대상이 이미 탈락한 경우 이 패턴 스킵
+      // 대상 탈락 체크
       if (!state.players[ev.to]?.alive) {
-        if (q[i + 1]?.kind === 'damage' && q[i + 1].target === ev.to) q.splice(i + 1, 1);
+        const nxt = q[i + 1];
+        if (nxt && (nxt.kind === 'damage' || nxt.kind === 'askDefense') && nxt.target === ev.to)
+          q.splice(i + 1, 1);
         continue;
       }
       const fromName = state.players[ev.from]?.name || '?';
@@ -1053,6 +1198,7 @@ async function playQueue(q, onDone) {
       showStageLeft(`${fromName} → ${toName}<br><small>${ev.label} 데미지 ${ev.amount}</small>`, 'atk');
       await sleep(700);
 
+    // ── restoreAllAnnounce ────────────────────────────────────
     } else if (ev.kind === 'restoreAllAnnounce') {
       if (!ev.aoe) continue;
       const a = state.players[ev.actor];
@@ -1060,6 +1206,14 @@ async function playQueue(q, onDone) {
       await sleep(400);
     }
   }
+
+  // ── 연쇄 완전 종료 후 전원 손패 보충 (v8) ─────────────────
+  state.turnOrder.forEach(id => {
+    const p = state.players[id];
+    if (!p.alive) return;
+    while (p.hand.length < CONFIG.maxHand) p.hand.push(drawCard());
+  });
+
   isPlaying = false;
   clearAllZones();
   render();
@@ -1088,7 +1242,7 @@ function aiTurn() {
 
   const pick = playable[Math.floor(Math.random()*playable.length)];
   ai.hand.splice(ai.hand.indexOf(pick.k), 1);
-  ai.hand.push(drawCard());
+  // 보충 없음 — 연쇄 종료 후 일괄 보충 (v8)
 
   const def = CARD_DEFS[pick.k];
   let targetId = null;
