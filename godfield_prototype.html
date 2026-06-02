@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>으리챗 난투전 — 프로토타입 v0.2</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
+
+  :root{
+    --bg:#1a1410;
+    --panel:#2a221b;
+    --panel-light:#3a2f25;
+    --ink:#f3e9d8;
+    --muted:#a8967c;
+    --gold:#e8b84b;
+    --red:#d6543f;
+    --green:#6fae6a;
+    --blue:#5b9bd5;
+    --line:#4a3c2e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(circle at 20% 10%, #2c2117 0%, transparent 50%),
+      radial-gradient(circle at 80% 90%, #241a12 0%, transparent 50%),
+      var(--bg);
+    color:var(--ink);
+    font-family:'Gowun Dodum',sans-serif;
+    min-height:100vh;
+    padding:16px;
+  }
+  h1,h2,.display{font-family:'Black Han Sans',sans-serif;letter-spacing:.5px}
+  .wrap{max-width:880px;margin:0 auto}
+
+  header{text-align:center;padding:12px 0 20px}
+  header h1{font-size:2.2rem;color:var(--gold);text-shadow:2px 2px 0 #000}
+  header p{color:var(--muted);font-size:.9rem;margin-top:4px}
+
+  /* 화면 전환 */
+  .screen{display:none}
+  .screen.active{display:block;animation:fade .35s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  /* 캐릭터 선택 */
+  .char-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin:16px 0}
+  .char-card{
+    background:var(--panel);border:2px solid var(--line);border-radius:10px;
+    padding:12px;cursor:pointer;transition:.15s;text-align:center
+  }
+  .char-card:hover{border-color:var(--gold);transform:translateY(-3px)}
+  .char-card.sel{border-color:var(--gold);background:var(--panel-light);box-shadow:0 0 0 2px var(--gold) inset}
+  .char-card .nm{font-family:'Black Han Sans';font-size:1.2rem;color:var(--gold)}
+  .char-card .ef{font-size:.78rem;color:var(--muted);margin-top:6px;line-height:1.4}
+  .btn{
+    background:var(--gold);color:#1a1410;border:none;padding:12px 28px;border-radius:8px;
+    font-family:'Black Han Sans';font-size:1.1rem;cursor:pointer;transition:.15s
+  }
+  .btn:hover{filter:brightness(1.1)}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.secondary{background:var(--panel-light);color:var(--ink);border:1px solid var(--line)}
+
+  /* 전투 화면 */
+  .players{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
+  .pl{background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:14px;transition:.2s}
+  .pl.active-turn{border-color:var(--gold);box-shadow:0 0 16px rgba(232,184,75,.3)}
+  .pl.dead{opacity:.35;filter:grayscale(1)}
+  .pl.targetable{border-color:var(--red);cursor:pointer;box-shadow:0 0 14px rgba(214,84,63,.4)}
+  .pl.targetable:hover{transform:translateY(-3px);box-shadow:0 0 22px rgba(214,84,63,.7)}
+  .pl .nm{font-family:'Black Han Sans';font-size:1.3rem}
+  .pl .you{color:var(--blue)}
+  .pl .ai{color:var(--red)}
+  .pl .char-tag{font-size:.75rem;color:var(--muted);margin:2px 0 8px}
+  .hpbar{background:#000;border-radius:6px;height:22px;overflow:hidden;position:relative;border:1px solid var(--line)}
+  .hpfill{background:linear-gradient(90deg,var(--red),var(--gold));height:100%;transition:width .4s}
+  .hptext{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:bold;text-shadow:1px 1px 2px #000}
+
+  /* 손패 */
+  .hand-label{font-family:'Black Han Sans';color:var(--gold);margin:10px 0 6px;font-size:1rem}
+  .hand{display:flex;gap:8px;flex-wrap:wrap}
+  .card{
+    background:var(--panel-light);border:2px solid var(--line);border-radius:8px;
+    padding:8px 10px;min-width:92px;cursor:pointer;transition:.15s;position:relative
+  }
+  .card:hover:not(.disabled){border-color:var(--gold);transform:translateY(-4px)}
+  .card.disabled{opacity:.35;cursor:not-allowed}
+  .card .cn{font-family:'Black Han Sans';font-size:.95rem}
+  .card .ct{font-size:.7rem;color:var(--muted);margin-top:3px}
+  .card .badge{position:absolute;top:-8px;right:-8px;background:var(--gold);color:#000;font-size:.62rem;
+    padding:2px 5px;border-radius:10px;font-weight:bold}
+  .tag-ATK{color:var(--red)} .tag-DEF{color:var(--blue)} .tag-HEAL{color:var(--green)}
+  .tag-ALL{color:#d98ad9} .tag-REFLECT{color:#e8b84b} .tag-Bounce{color:#e89a4b}
+
+  /* 로그 */
+  .log{background:#0e0a07;border:1px solid var(--line);border-radius:8px;padding:12px;
+    height:150px;overflow-y:auto;font-size:.82rem;line-height:1.6;margin-top:14px}
+  .log .l-sys{color:var(--muted)}
+  .log .l-hit{color:var(--red)}
+  .log .l-heal{color:var(--green)}
+  .log .l-miss{color:var(--muted);font-style:italic}
+  .log .l-block{color:var(--blue)}
+  .log .l-ref{color:var(--gold)}
+
+  /* 반응(피격) 모달 */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:50}
+  .overlay.active{display:flex}
+  .modal{background:var(--panel);border:2px solid var(--gold);border-radius:12px;padding:24px;max-width:440px;width:92%}
+  .modal h2{color:var(--gold);font-size:1.4rem;margin-bottom:8px}
+  .modal p{color:var(--ink);margin-bottom:16px;font-size:.95rem}
+  .modal .react-cards{display:flex;flex-direction:column;gap:8px}
+  .react-opt{background:var(--panel-light);border:1px solid var(--line);border-radius:8px;padding:12px;
+    cursor:pointer;transition:.15s;text-align:left}
+  .react-opt:hover{border-color:var(--gold)}
+
+  .status{text-align:center;padding:10px;color:var(--gold);font-family:'Black Han Sans';font-size:1.05rem;min-height:1.5em}
+  .center{text-align:center;margin-top:18px}
+
+  .winner{text-align:center;padding:40px}
+  .winner h2{font-size:2.6rem;color:var(--gold);text-shadow:2px 2px 0 #000}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>으리챗 난투전</h1>
+    <p>프로토타입 v0.2 · 나 vs AI 3명 · 4인 난투 로컬 검증용</p>
+  </header>
+
+  <!-- 캐릭터 선택 화면 -->
+  <section id="screen-select" class="screen active">
+    <h2 style="color:var(--ink);text-align:center">캐릭터를 선택하세요</h2>
+    <div id="charGrid" class="char-grid"></div>
+    <div class="center">
+      <button id="startBtn" class="btn" disabled>게임 시작</button>
+    </div>
+  </section>
+
+  <!-- 전투 화면 -->
+  <section id="screen-battle" class="screen">
+    <div class="status" id="statusBar">—</div>
+    <div class="players" id="playersBox"></div>
+    <div class="hand-label">내 손패 — 카드를 눌러 사용</div>
+    <div class="hand" id="handBox"></div>
+    <div class="center" style="margin-top:12px">
+      <button id="passBtn" class="btn secondary">패스 (카드 1장 버림)</button>
+    </div>
+    <div class="log" id="logBox"></div>
+  </section>
+
+  <!-- 승리 화면 -->
+  <section id="screen-win" class="screen">
+    <div class="winner">
+      <h2 id="winText">승리!</h2>
+      <p style="color:var(--muted);margin:16px 0 24px" id="winSub"></p>
+      <button class="btn" onclick="location.reload()">다시 하기</button>
+    </div>
+  </section>
+</div>
+
+<!-- 피격 반응 모달 -->
+<div class="overlay" id="reactOverlay">
+  <div class="modal">
+    <h2>공격받았다!</h2>
+    <p id="reactDesc">—</p>
+    <div class="react-cards" id="reactCards"></div>
+  </div>
+</div>
+
+<script>
+/* =========================================================
+   으리챗 난투전 — 로컬 프로토타입 v0.2 (4인 난투)
+   기획서 5장 game state 구조를 그대로 따른다.
+   이 state 객체를 나중에 Firebase에 올리면 온라인 전환.
+   ========================================================= */
+
+// ---------- 카드 정의 (기획서 11-5 통합 테이블) ----------
+const CARD_DEFS = {
+  munchi:  { name:"뭉치 짖기", type:"ALL",     value:10, prob:0.5, trigger:"최초", plusType:"ProbabilityUP", plusValue:0.25 },
+  kalbang: { name:"칼빵",      type:"ATK",     value:5,  prob:1,   trigger:null,   plusType:null,            plusValue:0 },
+  cook:    { name:"요리하기",  type:"HEAL",    value:5,  prob:1,   trigger:"종원", plusType:"ValueUP",       plusValue:2 },
+  painkill:{ name:"진통제",    type:"DEF",     value:10, prob:1,   trigger:"기종", plusType:"ValueUP",       plusValue:5 },
+  protein: { name:"프로틴",    type:"ATK",     value:5,  prob:1,   trigger:"현일", plusType:"HEAL",          plusValue:2 },
+  mirror:  { name:"무지개 반사",type:"REFLECT", value:0,  prob:1,   trigger:null,   plusType:null,            plusValue:0 },
+  bounce:  { name:"유수암쇄권", type:"Bounce",  value:0,  prob:1,   trigger:"기훈", plusType:"Target",        plusValue:2 },
+};
+const CARD_KEYS = Object.keys(CARD_DEFS);
+
+// ---------- 캐릭터 정의 (기획서 10장) ----------
+const CHARACTERS = [
+  { id:"최초", desc:"뭉치 짖기 명중률 ↑" },
+  { id:"종원", desc:"요리하기 회복량 ↑" },
+  { id:"기종", desc:"진통제 방어량 ↑" },
+  { id:"현일", desc:"프로틴 공격 시 회복" },
+  { id:"기훈", desc:"유수암쇄권 대상 ↑" },
+  { id:"규형", desc:"(트리거 카드 미배치)" },
+  { id:"지원", desc:"(트리거 카드 미배치)" },
+  { id:"소민", desc:"(트리거 카드 미배치)" },
+  { id:"준형", desc:"(트리거 카드 미배치)" },
+  { id:"종문", desc:"(트리거 카드 미배치)" },
+];
+
+const TYPE_TIMING = { ATK:"MyTurn", ALL:"MyTurn", HEAL:"MyTurn", DEF:"OnHit", REFLECT:"OnHit", Bounce:"OnHit" };
+const CONFIG = { startHp:80, handSize:5, maxHand:6 };
+const AI_IDS = ["ai1","ai2","ai3"];
+const AI_NAMES = ["상대A","상대B","상대C"];
+
+// ---------- 게임 상태 ----------
+let state = null;
+let selectedChar = null;
+let pendingCardUse = null; // { handIdx, key } — 타겟 선택 대기 중
+
+// ============ 캐릭터 선택 화면 ============
+function renderCharSelect(){
+  const grid = document.getElementById('charGrid');
+  grid.innerHTML = '';
+  CHARACTERS.forEach(c=>{
+    const div = document.createElement('div');
+    div.className = 'char-card';
+    div.innerHTML = `<div class="nm">${c.id}</div><div class="ef">${c.desc}</div>`;
+    div.onclick = ()=>{
+      selectedChar = c.id;
+      document.querySelectorAll('.char-card').forEach(e=>e.classList.remove('sel'));
+      div.classList.add('sel');
+      document.getElementById('startBtn').disabled = false;
+    };
+    grid.appendChild(div);
+  });
+}
+
+document.getElementById('startBtn').onclick = startGame;
+
+// ============ 게임 시작 ============
+function drawCard(){ return CARD_KEYS[Math.floor(Math.random()*CARD_KEYS.length)]; }
+function newHand(n){ return Array.from({length:n}, drawCard); }
+
+function startGame(){
+  // AI 3명 — 중복 허용 (기획서 4-5-1)
+  const aiChars = AI_IDS.map(()=>{
+    const pool = CHARACTERS.filter(c=>c.id!==selectedChar);
+    return pool[Math.floor(Math.random()*pool.length)].id;
+  });
+
+  const players = {
+    you:{ name:"나", characterId:selectedChar, hp:CONFIG.startHp, alive:true, hand:newHand(CONFIG.handSize) },
+  };
+  AI_IDS.forEach((id,i)=>{
+    players[id] = { name:AI_NAMES[i], characterId:aiChars[i], hp:CONFIG.startHp, alive:true, hand:newHand(CONFIG.handSize) };
+  });
+
+  state = {
+    phase:"playing",
+    turnOrder:["you",...AI_IDS],
+    currentTurnIndex:0,
+    pendingAction:null,
+    players,
+    log:[],
+    winner:null,
+  };
+  pendingCardUse = null;
+  showScreen('battle');
+  const aiDesc = AI_IDS.map((id,i)=>`${AI_NAMES[i]}(${aiChars[i]})`).join(', ');
+  pushLog(`게임 시작! 나(${selectedChar}) vs ${aiDesc}`, 'sys');
+  beginTurn();
+}
+
+// ============ 화면 전환 ============
+function showScreen(name){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById('screen-'+name).classList.add('active');
+}
+
+// ============ 턴 시작 ============
+function beginTurn(){
+  if(checkWin()) return;
+  const cur = state.turnOrder[state.currentTurnIndex];
+  if(!state.players[cur].alive){ nextTurn(); return; }
+
+  const p = state.players[cur];
+  if(p.hand.length < CONFIG.maxHand) p.hand.push(drawCard());
+
+  pendingCardUse = null;
+  render();
+  if(cur==="you"){
+    setStatus("내 턴 — 카드를 사용하거나 패스하세요");
+  }else{
+    setStatus(`${p.name}의 턴…`);
+    setTimeout(aiTurn, 900);
+  }
+}
+
+function nextTurn(){
+  state.currentTurnIndex = (state.currentTurnIndex+1) % state.turnOrder.length;
+  beginTurn();
+}
+
+// ============ 명중/효과 헬퍼 ============
+function effProb(cardKey, ownerChar){
+  const d = CARD_DEFS[cardKey];
+  let p = d.prob;
+  if(d.trigger===ownerChar && d.plusType==="ProbabilityUP") p += d.plusValue;
+  return Math.min(1, p);
+}
+function effValue(cardKey, ownerChar){
+  const d = CARD_DEFS[cardKey];
+  let v = d.value;
+  if(d.trigger===ownerChar && d.plusType==="ValueUP") v += d.plusValue;
+  return v;
+}
+function rollHit(p){ return Math.random() < p; }
+
+// ============ 내 턴: 카드 사용 ============
+function useCard(handIdx){
+  if(state.turnOrder[state.currentTurnIndex]!=="you") return;
+  if(pendingCardUse) return; // 이미 타겟 대기 중
+  const me = state.players.you;
+  const key = me.hand[handIdx];
+  const def = CARD_DEFS[key];
+  if(TYPE_TIMING[def.type]!=="MyTurn"){
+    setStatus("이 카드는 공격받았을 때만 쓸 수 있어요");
+    return;
+  }
+  if(def.type==="ATK"){
+    // 타겟 선택 모드 진입
+    pendingCardUse = { handIdx, key };
+    setStatus("⚔ 공격할 상대를 클릭하세요  [취소: 패스 버튼]");
+    render();
+    return;
+  }
+  // HEAL, ALL: 타겟 불필요
+  me.hand.splice(handIdx, 1);
+  resolveMyTurnCard("you", null, key);
+}
+
+function selectTarget(targetId){
+  if(!pendingCardUse) return;
+  if(targetId==="you" || !state.players[targetId].alive) return;
+  const { handIdx, key } = pendingCardUse;
+  pendingCardUse = null;
+  state.players.you.hand.splice(handIdx, 1);
+  resolveMyTurnCard("you", targetId, key);
+}
+
+function cancelTargeting(){
+  pendingCardUse = null;
+  render();
+  setStatus("내 턴 — 카드를 사용하거나 패스하세요");
+}
+
+document.getElementById('passBtn').onclick = ()=>{
+  if(state.turnOrder[state.currentTurnIndex]!=="you") return;
+  if(pendingCardUse){ cancelTargeting(); return; }
+  const me = state.players.you;
+  if(me.hand.length>0) me.hand.pop();
+  pushLog("나는 패스했다.", 'sys');
+  render();
+  setTimeout(nextTurn, 500);
+};
+
+// ============ MyTurn 카드 처리 ============
+function resolveMyTurnCard(attackerId, targetId, key){
+  const def = CARD_DEFS[key];
+  const atkChar = state.players[attackerId].characterId;
+
+  if(def.type==="HEAL"){
+    const heal = effValue(key, atkChar);
+    state.players[attackerId].hp = Math.min(CONFIG.startHp, state.players[attackerId].hp + heal);
+    pushLog(`${state.players[attackerId].name}: ${def.name}으로 HP ${heal} 회복`, 'heal');
+    render(); finishAction(attackerId); return;
+  }
+
+  if(def.type==="ALL"){
+    const targets = state.turnOrder.filter(id=>id!==attackerId && state.players[id].alive);
+    const prob = effProb(key, atkChar);
+    targets.forEach(tid=>{
+      if(rollHit(prob)){
+        applyDamage(tid, def.value, attackerId, def.name, false);
+      }else{
+        pushLog(`${def.name} → ${state.players[tid].name} 빗나감!`, 'miss');
+      }
+    });
+    render(); finishAction(attackerId); return;
+  }
+
+  if(def.type==="ATK"){
+    const prob = effProb(key, atkChar);
+    if(def.trigger===atkChar && def.plusType==="HEAL"){
+      state.players[attackerId].hp = Math.min(CONFIG.startHp, state.players[attackerId].hp + def.plusValue);
+      pushLog(`${state.players[attackerId].name}: ${def.name} 효과로 HP ${def.plusValue} 회복`, 'heal');
+    }
+    if(!rollHit(prob)){
+      pushLog(`${state.players[attackerId].name}의 ${def.name} → 빗나감!`, 'miss');
+      render(); finishAction(attackerId); return;
+    }
+    offerReaction(attackerId, targetId, key, def.value);
+    return;
+  }
+}
+
+// ============ 피격 반응 (OnHit) ============
+function getReactionCards(playerId){
+  return state.players[playerId].hand
+    .map((k,i)=>({k,i}))
+    .filter(o=>TYPE_TIMING[CARD_DEFS[o.k].type]==="OnHit");
+}
+
+function offerReaction(attackerId, targetId, atkKey, dmg){
+  const reactions = getReactionCards(targetId);
+  if(targetId==="you"){
+    openReactModal(attackerId, targetId, atkKey, dmg, reactions);
+  }else{
+    let choice = "take";
+    if(reactions.length>0 && Math.random()<0.5){
+      choice = reactions[Math.floor(Math.random()*reactions.length)];
+    }
+    applyReaction(attackerId, targetId, atkKey, dmg, choice);
+  }
+}
+
+function openReactModal(attackerId, targetId, atkKey, dmg, reactions){
+  const ov = document.getElementById('reactOverlay');
+  const desc = document.getElementById('reactDesc');
+  const box = document.getElementById('reactCards');
+  desc.textContent = `${state.players[attackerId].name}의 ${CARD_DEFS[atkKey].name} — ${dmg} 데미지가 들어옵니다!`;
+  box.innerHTML='';
+
+  const takeBtn = document.createElement('div');
+  takeBtn.className='react-opt';
+  takeBtn.innerHTML = `<b>그냥 맞기</b> — HP ${dmg} 감소`;
+  takeBtn.onclick = ()=>{ closeReactModal(); applyReaction(attackerId,targetId,atkKey,dmg,"take"); };
+  box.appendChild(takeBtn);
+
+  reactions.forEach(o=>{
+    const d = CARD_DEFS[o.k];
+    const tChar = state.players[targetId].characterId;
+    const btn = document.createElement('div');
+    btn.className='react-opt';
+    let label = `<b>${d.name}</b> (${d.type}) — `;
+    if(d.type==="DEF") label += `데미지 ${effValue(o.k, tChar)} 경감`;
+    else if(d.type==="REFLECT") label += `공격자에게 그대로 반사`;
+    else if(d.type==="Bounce") label += `랜덤 대상에게 떠넘김`;
+    btn.innerHTML = label;
+    btn.onclick = ()=>{ closeReactModal(); applyReaction(attackerId,targetId,atkKey,dmg,o); };
+    box.appendChild(btn);
+  });
+
+  ov.classList.add('active');
+}
+function closeReactModal(){ document.getElementById('reactOverlay').classList.remove('active'); }
+
+function applyReaction(attackerId, targetId, atkKey, dmg, choice){
+  const tName = state.players[targetId].name;
+
+  if(choice==="take"){
+    applyDamage(targetId, dmg, attackerId, CARD_DEFS[atkKey].name, false);
+    render(); finishAction(attackerId); return;
+  }
+
+  const tHand = state.players[targetId].hand;
+  const idx = tHand.indexOf(choice.k);
+  if(idx>=0) tHand.splice(idx,1);
+  const rDef = CARD_DEFS[choice.k];
+  const tChar = state.players[targetId].characterId;
+
+  if(rDef.type==="DEF"){
+    const reduce = effValue(choice.k, tChar);
+    const final = Math.max(0, dmg - reduce);
+    pushLog(`${tName}: ${rDef.name}으로 방어 (−${reduce}) → ${final} 피해`, 'block');
+    if(final>0) applyDamage(targetId, final, attackerId, "관통", false);
+    render(); finishAction(attackerId); return;
+  }
+
+  if(rDef.type==="REFLECT"){
+    pushLog(`${tName}: ${rDef.name}! 공격자에게 ${dmg} 반사`, 'ref');
+    applyDamage(attackerId, dmg, targetId, "반사", false);
+    render(); finishAction(attackerId); return;
+  }
+
+  if(rDef.type==="Bounce"){
+    let nTargets = 1;
+    if(rDef.trigger===tChar && rDef.plusType==="Target") nTargets += rDef.plusValue;
+    const alive = state.turnOrder.filter(id=>state.players[id].alive);
+    pushLog(`${tName}: ${rDef.name}! ${dmg} 데미지를 랜덤 ${nTargets}명에게 떠넘김`, 'ref');
+    for(let n=0;n<nTargets;n++){
+      const victim = alive[Math.floor(Math.random()*alive.length)];
+      applyDamage(victim, dmg, targetId, "떠넘김", false);
+    }
+    render(); finishAction(attackerId); return;
+  }
+}
+
+// ============ 데미지 적용 ============
+function applyDamage(targetId, dmg, sourceId, label, allowReact){
+  const p = state.players[targetId];
+  if(!p.alive) return;
+  p.hp -= dmg;
+  pushLog(`${p.name} ${label}으로 ${dmg} 피해 (HP ${Math.max(0,p.hp)})`, 'hit');
+  if(p.hp<=0){
+    p.hp=0; p.alive=false;
+    pushLog(`💀 ${p.name} 탈락!`, 'sys');
+  }
+}
+
+// ============ 행동 종료 → 다음 턴 ============
+function finishAction(actorId){
+  render();
+  if(checkWin()) return;
+  setTimeout(nextTurn, 700);
+}
+
+// ============ AI 턴 ============
+function aiTurn(){
+  const curId = state.turnOrder[state.currentTurnIndex];
+  const ai = state.players[curId];
+  if(!ai.alive){ nextTurn(); return; }
+
+  const playable = ai.hand
+    .map((k,i)=>({k,i}))
+    .filter(o=>TYPE_TIMING[CARD_DEFS[o.k].type]==="MyTurn");
+
+  if(playable.length===0){
+    if(ai.hand.length>0) ai.hand.pop();
+    pushLog(`${ai.name}은 패스했다.`, 'sys');
+    render(); setTimeout(nextTurn,500); return;
+  }
+
+  const pick = playable[Math.floor(Math.random()*playable.length)];
+  const idx = ai.hand.indexOf(pick.k);
+  ai.hand.splice(idx,1);
+
+  // 타겟 선택: 살아있는 다른 플레이어 중 랜덤
+  const def = CARD_DEFS[pick.k];
+  let targetId = null;
+  if(def.type==="ATK"){
+    const candidates = state.turnOrder.filter(id=>id!==curId && state.players[id].alive);
+    targetId = candidates[Math.floor(Math.random()*candidates.length)];
+    pushLog(`${ai.name} → ${state.players[targetId].name}을 타겟으로 ${def.name}!`, 'sys');
+  }
+  resolveMyTurnCard(curId, targetId, pick.k);
+}
+
+// ============ 승리 체크 ============
+function checkWin(){
+  const alive = state.turnOrder.filter(id=>state.players[id].alive);
+  if(alive.length<=1){
+    state.phase="finished";
+    state.winner = alive[0] || null;
+    const won = state.winner==="you";
+    const winnerName = state.winner ? state.players[state.winner].name : "없음";
+    document.getElementById('winText').textContent = won ? "승리!" : `${winnerName} 우승!`;
+    document.getElementById('winText').style.color = won ? "var(--gold)" : "var(--red)";
+    document.getElementById('winSub').textContent = won
+      ? "4명 중 마지막까지 살아남았다!" : "다음엔 더 잘 떠넘겨보자.";
+    showScreen('win');
+    return true;
+  }
+  return false;
+}
+
+// ============ 렌더링 ============
+function render(){
+  const box = document.getElementById('playersBox');
+  box.innerHTML='';
+  const curId = state.turnOrder[state.currentTurnIndex];
+  const targeting = !!pendingCardUse;
+
+  state.turnOrder.forEach(id=>{
+    const p = state.players[id];
+    const isTargetable = targeting && id!=="you" && p.alive;
+    let cls = 'pl';
+    if(id===curId && p.alive) cls += ' active-turn';
+    if(!p.alive) cls += ' dead';
+    if(isTargetable) cls += ' targetable';
+
+    const div = document.createElement('div');
+    div.className = cls;
+    const nameCls = id==="you" ? "you" : "ai";
+    const hpPct = Math.max(0, p.hp/CONFIG.startHp*100);
+    const hpColor = hpPct>50 ? 'var(--green)' : hpPct>25 ? 'var(--gold)' : 'var(--red)';
+    div.innerHTML = `
+      <div class="nm ${nameCls}">${p.name}${id===curId&&p.alive?' ◀':''}</div>
+      <div class="char-tag">${p.characterId}${isTargetable?' 👆 클릭하여 타겟':''}</div>
+      <div class="hpbar">
+        <div class="hpfill" style="width:${hpPct}%;background:linear-gradient(90deg,${hpColor},${hpColor}aa)"></div>
+        <div class="hptext">${Math.max(0,p.hp)} / ${CONFIG.startHp}</div>
+      </div>
+      <div class="char-tag" style="margin-top:6px">손패 ${p.hand.length}장</div>`;
+    if(isTargetable) div.onclick = ()=>selectTarget(id);
+    box.appendChild(div);
+  });
+  renderHand();
+}
+
+function renderHand(){
+  const box = document.getElementById('handBox');
+  box.innerHTML='';
+  const me = state.players.you;
+  const myTurn = state.turnOrder[state.currentTurnIndex]==="you";
+  const targeting = !!pendingCardUse;
+
+  me.hand.forEach((k,i)=>{
+    const d = CARD_DEFS[k];
+    const isMyTurnCard = TYPE_TIMING[d.type]==="MyTurn";
+    // 타겟 대기 중엔 카드 클릭 불가
+    const usable = myTurn && isMyTurnCard && !targeting;
+    const isPending = targeting && pendingCardUse.handIdx===i;
+    const div = document.createElement('div');
+    div.className='card'+(usable||isPending?'':' disabled')+(isPending?' active-turn':'');
+    let valLabel = d.type==="HEAL"?`회복 ${d.value}`
+                 : d.type==="DEF"?`방어 ${d.value}`
+                 : d.type==="REFLECT"?`반사`
+                 : d.type==="Bounce"?`떠넘김`
+                 : `데미지 ${d.value}`;
+    const probLabel = d.prob<1?` · 명중 ${Math.round(d.prob*100)}%`:'';
+    const triggerBadge = d.trigger===me.characterId ? `<div class="badge">전용</div>`:'';
+    div.innerHTML = `${triggerBadge}
+      <div class="cn tag-${d.type}">${d.name}</div>
+      <div class="ct">${d.type} · ${valLabel}${probLabel}</div>
+      <div class="ct" style="color:var(--muted)">${isMyTurnCard?'내 턴':'피격 시'}</div>`;
+    if(usable) div.onclick=()=>useCard(i);
+    box.appendChild(div);
+  });
+}
+
+function setStatus(t){ document.getElementById('statusBar').textContent=t; }
+function pushLog(msg, kind){
+  state.log.push(msg);
+  const box=document.getElementById('logBox');
+  const line=document.createElement('div');
+  line.className='l-'+(kind||'sys');
+  line.textContent='▸ '+msg;
+  box.appendChild(line);
+  box.scrollTop=box.scrollHeight;
+}
+
+// 초기화
+renderCharSelect();
+</script>
+</body>
+</html>
