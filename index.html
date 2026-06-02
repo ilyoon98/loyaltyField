@@ -33,7 +33,7 @@
   .divider{text-align:center;color:var(--muted);font-size:.85rem;margin:4px 0}
   .waiting-player{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
   .players{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
-  .pl{background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:14px;transition:.2s}
+  .pl{background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:14px;transition:.2s;position:relative}
   .pl.active-turn{border-color:var(--gold);box-shadow:0 0 16px rgba(232,184,75,.3)}
   .pl.dead{opacity:.35;filter:grayscale(1)}
   .pl.targetable{border-color:var(--red);cursor:pointer;box-shadow:0 0 14px rgba(214,84,63,.4)}
@@ -49,7 +49,8 @@
   .card{background:var(--panel-light);border:2px solid var(--line);border-radius:8px;padding:8px 10px;min-width:92px;cursor:pointer;transition:.15s;position:relative}
   .card:hover:not(.disabled){border-color:var(--gold);transform:translateY(-4px)}
   .card.disabled{opacity:.35;cursor:not-allowed}
-  .card .cn{font-family:'Black Han Sans';font-size:.95rem}
+  .card .ci{font-size:1.7rem;text-align:center;line-height:1.1}
+  .card .cn{font-family:'Black Han Sans';font-size:.95rem;text-align:center}
   .card .ct{font-size:.7rem;color:var(--muted);margin-top:3px}
   .card .badge{position:absolute;top:-8px;right:-8px;background:var(--gold);color:#000;font-size:.62rem;padding:2px 5px;border-radius:10px;font-weight:bold}
   .tag-ATK{color:var(--red)}.tag-DEF{color:var(--blue)}.tag-HEAL{color:var(--green)}
@@ -65,7 +66,33 @@
   .modal .react-cards{display:flex;flex-direction:column;gap:8px}
   .react-opt{background:var(--panel-light);border:1px solid var(--line);border-radius:8px;padding:12px;cursor:pointer;transition:.15s;text-align:left}
   .react-opt:hover{border-color:var(--gold)}
-  .status{text-align:center;padding:10px;color:var(--gold);font-family:'Black Han Sans';font-size:1.05rem;min-height:1.5em}
+  .status{text-align:center;padding:6px;color:var(--muted);font-family:'Black Han Sans';font-size:.95rem;min-height:1.4em}
+  /* 중앙 연출 레이어 (기획 12-5) */
+  .stage{min-height:96px;display:flex;align-items:center;justify-content:center;margin:4px 0 14px}
+  .stage:empty{min-height:96px}
+  .stage-inner{font-family:'Black Han Sans';font-size:1.5rem;text-align:center;line-height:1.25;
+    padding:14px 26px;border-radius:14px;background:var(--panel);border:2px solid var(--line);
+    box-shadow:0 6px 26px rgba(0,0,0,.45);animation:stagePop .3s ease}
+  .stage-inner .s-card{font-size:2.2rem;display:block;margin-bottom:2px}
+  .stage-inner small{font-size:.8rem;color:var(--muted);font-family:'Gowun Dodum'}
+  .stage-inner .big-num{font-size:2.8rem}
+  @keyframes stagePop{from{opacity:0;transform:scale(.82) translateY(10px)}to{opacity:1;transform:none}}
+  .stage.atk  .stage-inner{border-color:var(--red);color:var(--red)}
+  .stage.aoe  .stage-inner{border-color:#d98ad9;color:#d98ad9}
+  .stage.block .stage-inner{border-color:var(--blue);color:var(--blue)}
+  .stage.ref  .stage-inner{border-color:var(--gold);color:var(--gold)}
+  .stage.miss .stage-inner{border-color:var(--muted);color:var(--muted)}
+  .stage.dmg  .stage-inner{border-color:var(--red)}
+  .stage.dmg  .stage-inner .big-num{color:var(--red)}
+  .stage.heal .stage-inner{border-color:var(--green);color:var(--green)}
+  /* HP바 위로 튀는 데미지 숫자 */
+  .dmg-float{position:absolute;top:8px;left:50%;font-family:'Black Han Sans';font-size:1.7rem;
+    color:var(--red);text-shadow:0 2px 6px #000;pointer-events:none;z-index:5;
+    animation:dmgFloat 1s ease forwards}
+  .dmg-float.heal-float{color:var(--green)}
+  @keyframes dmgFloat{0%{opacity:0;transform:translate(-50%,8px) scale(.6)}
+    25%{opacity:1;transform:translate(-50%,-8px) scale(1.1)}
+    100%{opacity:0;transform:translate(-50%,-36px) scale(1)}}
   .center{text-align:center;margin-top:18px}
   .winner{text-align:center;padding:40px}
   .winner h2{font-size:2.6rem;color:var(--gold);text-shadow:2px 2px 0 #000}
@@ -150,6 +177,7 @@
   <!-- 전투 -->
   <section id="screen-battle" class="screen">
     <div class="status" id="statusBar">—</div>
+    <div class="stage" id="stageBox"></div>
     <div class="players" id="playersBox"></div>
     <div class="hand-label">내 손패 — 카드를 눌러 사용</div>
     <div class="hand" id="handBox"></div>
@@ -219,6 +247,8 @@ const CARD_DEFS = {
   bounce:  { name:"유수암쇄권", type:"Bounce",  value:0,  prob:1,   trigger:"기훈", plusType:"Target",        plusValue:2 },
 };
 const CARD_KEYS = Object.keys(CARD_DEFS);
+const CARD_ICON = { munchi:'🐕', kalbang:'🔪', cook:'🍳', painkill:'💊', protein:'💪', mirror:'🌈', bounce:'🥋' };
+function cardIcon(k){ return CARD_ICON[k] || '🃏'; }
 
 // ── 캐릭터 정의 ──────────────────────────────────────────────
 const CHARACTERS = [
@@ -565,6 +595,7 @@ function beginTurn() {
   if (!state.players[cur].alive) { nextTurn(); return; }
   const p = state.players[cur];
   pendingCardUse = null;
+  clearStage();
   render();
   const myId = gameMode === 'online' ? myUid : 'you';
   if (cur === myId) {
@@ -837,7 +868,7 @@ function buildReactionEvents(attackerId, targetId, atkKey, dmg, choice) {
   const evs = [];
   const tName = state.players[targetId].name;
   if (choice === 'take') {
-    evs.push({ kind:'react', text:`${tName}, 그냥 맞기`, log:`${tName} 그냥 맞기`, logKind:'sys' });
+    evs.push({ kind:'react', text:`😣 ${tName}, 그냥 맞기`, log:`${tName} 그냥 맞기`, logKind:'sys', stageCls:'' });
     evs.push({ kind:'damage', target:targetId, amount:dmg, label:CARD_DEFS[atkKey].name });
     return evs;
   }
@@ -849,16 +880,16 @@ function buildReactionEvents(attackerId, targetId, atkKey, dmg, choice) {
   if (rDef.type === 'DEF') {
     const reduce = effValue(choice.k, tChar);
     const final = Math.max(0, dmg - reduce);
-    evs.push({ kind:'react', text:`🛡 ${tName} 막음! (−${reduce})`, log:`${tName}: ${rDef.name}으로 방어 (−${reduce}) → ${final} 피해`, logKind:'block' });
+    evs.push({ kind:'react', text:`🛡 ${tName} 막음!<br><small>−${reduce} 경감</small>`, log:`${tName}: ${rDef.name}으로 방어 (−${reduce}) → ${final} 피해`, logKind:'block', stageCls:'block' });
     if (final > 0) evs.push({ kind:'damage', target:targetId, amount:final, label:'관통' });
   } else if (rDef.type === 'REFLECT') {
-    evs.push({ kind:'react', text:`🔄 ${tName} 반사!`, log:`${tName}: ${rDef.name}! 공격자에게 ${dmg} 반사`, logKind:'ref' });
+    evs.push({ kind:'react', text:`🔄 ${tName} 반사!<br><small>공격자에게 되돌림</small>`, log:`${tName}: ${rDef.name}! 공격자에게 ${dmg} 반사`, logKind:'ref', stageCls:'ref' });
     evs.push({ kind:'damage', target:attackerId, amount:dmg, label:'반사' });
   } else if (rDef.type === 'Bounce') {
     let nT = 1;
     if (rDef.trigger === tChar && rDef.plusType === 'Target') nT += rDef.plusValue;
     const alive = state.turnOrder.filter(id => state.players[id].alive);
-    evs.push({ kind:'react', text:`💥 ${tName} 떠넘김! (${nT}명)`, log:`${tName}: ${rDef.name}! ${dmg} 데미지를 랜덤 ${nT}명에게 떠넘김`, logKind:'ref' });
+    evs.push({ kind:'react', text:`🥋 ${tName} 떠넘김!<br><small>랜덤 ${nT}명에게</small>`, log:`${tName}: ${rDef.name}! ${dmg} 데미지를 랜덤 ${nT}명에게 떠넘김`, logKind:'ref', stageCls:'ref' });
     for (let n = 0; n < nT; n++) {
       const victim = alive[Math.floor(Math.random() * alive.length)];
       evs.push({ kind:'damage', target:victim, amount:dmg, label:'떠넘김' });
@@ -923,21 +954,24 @@ async function playQueue(q, onDone) {
       const p = state.players[ev.target];
       p.hp = Math.min(CONFIG.startHp, p.hp + ev.amount);
       pushLog(`${p.name}: ${CARD_DEFS[ev.card].name} 효과로 HP ${ev.amount} 회복`, 'heal');
-      render(); await sleep(700);
+      showStage(`<span class="s-card">${cardIcon(ev.card)}</span>${p.name} HP +${ev.amount}`, 'heal');
+      render(); floatNumber(ev.target, ev.amount, true); await sleep(700);
     } else if (ev.kind === 'announce') {
       const a = state.players[ev.actor];
       if (ev.aoe) {
-        setStatus(`💥 ${a.name} : ${CARD_DEFS[ev.card].name}! (전체공격)`);
+        showStage(`<span class="s-card">${cardIcon(ev.card)}</span>${CARD_DEFS[ev.card].name}!<br><small>${a.name}의 전체공격</small>`, 'aoe');
+        setStatus(`${a.name}의 턴`);
         pushLog(`${a.name}: ${CARD_DEFS[ev.card].name} 전체공격!`, 'sys');
       } else {
         const t = state.players[ev.target];
-        setStatus(`⚔ ${a.name} → ${t.name} : ${CARD_DEFS[ev.card].name}!`);
+        showStage(`<span class="s-card">${cardIcon(ev.card)}</span>${a.name} → ${t.name}<br>${CARD_DEFS[ev.card].name}!`, 'atk');
+        setStatus(`${a.name}의 턴`);
         pushLog(`${a.name} → ${t.name}에게 ${CARD_DEFS[ev.card].name} 공격!`, 'sys');
       }
       render(); await sleep(900);
     } else if (ev.kind === 'hitcheck') {
       if (!ev.hit) {
-        setStatus('빗나감!');
+        showStage(`<span class="s-card">💨</span>빗나감!<br><small>${state.players[ev.target].name}</small>`, 'miss');
         pushLog(`${CARD_DEFS[ev.card].name} → ${state.players[ev.target].name} 빗나감!`, 'miss');
         render(); await sleep(800);
       }
@@ -947,12 +981,13 @@ async function playQueue(q, onDone) {
       const reactEvents = buildReactionEvents(ev.attacker, ev.target, ev.item, ev.incoming, choice);
       q.splice(i + 1, 0, ...reactEvents);
     } else if (ev.kind === 'react') {
-      setStatus(ev.text);
+      showStage(ev.text, ev.stageCls || '');
       pushLog(ev.log, ev.logKind);
       render(); await sleep(800);
     } else if (ev.kind === 'damage') {
+      showStage(`<span class="big-num">−${ev.amount}</span><br><small>${state.players[ev.target].name} · ${ev.label}</small>`, 'dmg');
       applyDamage(ev.target, ev.amount, null, ev.label);
-      render(); await sleep(800);
+      render(); floatNumber(ev.target, ev.amount, false); await sleep(800);
     }
   }
   isPlaying = false;
@@ -1031,6 +1066,7 @@ function render() {
     if (isTargetable) cls += ' targetable';
     const div = document.createElement('div');
     div.className = cls;
+    div.id = 'pl-' + id;
     const nameCls = id === myId ? 'you' : 'ai';
     const hpPct = Math.max(0, p.hp / CONFIG.startHp * 100);
     const hpCol = hpPct > 50 ? 'var(--green)' : hpPct > 25 ? 'var(--gold)' : 'var(--red)';
@@ -1065,13 +1101,34 @@ function renderHand() {
     let val = d.type==='HEAL'?`회복 ${d.value}`:d.type==='DEF'?`방어 ${d.value}`:d.type==='REFLECT'?'반사':d.type==='Bounce'?'떠넘김':`데미지 ${d.value}`;
     const prob = d.prob<1?` · 명중 ${Math.round(d.prob*100)}%`:'';
     const badge = d.trigger===me.characterId?`<div class="badge">전용</div>`:'';
-    div.innerHTML = `${badge}<div class="cn tag-${d.type}">${d.name}</div><div class="ct">${d.type} · ${val}${prob}</div><div class="ct" style="color:var(--muted)">${isMyTurnCard?'내 턴':'피격 시'}</div>`;
+    div.innerHTML = `${badge}<div class="ci">${cardIcon(k)}</div><div class="cn tag-${d.type}">${d.name}</div><div class="ct">${d.type} · ${val}${prob}</div><div class="ct" style="color:var(--muted)">${isMyTurnCard?'내 턴':'피격 시'}</div>`;
     if (usable) div.onclick = () => useCard(i);
     box.appendChild(div);
   });
 }
 
 function setStatus(t) { document.getElementById('statusBar').textContent = t; }
+
+// ── 중앙 연출 레이어 (기획 12-5) ──────────────────────────────
+function showStage(html, cls) {
+  const box = document.getElementById('stageBox');
+  box.className = 'stage ' + (cls || '');
+  box.innerHTML = `<div class="stage-inner">${html}</div>`;
+}
+function clearStage() {
+  const box = document.getElementById('stageBox');
+  if (box) { box.className = 'stage'; box.innerHTML = ''; }
+}
+// 플레이어 카드 위로 데미지/회복 숫자가 튀어오름
+function floatNumber(targetId, amount, isHeal) {
+  const card = document.getElementById('pl-' + targetId);
+  if (!card) return;
+  const span = document.createElement('div');
+  span.className = 'dmg-float' + (isHeal ? ' heal-float' : '');
+  span.textContent = (isHeal ? '+' : '−') + amount;
+  card.appendChild(span);
+  setTimeout(() => span.remove(), 1000);
+}
 
 function pushLog(msg, kind) {
   if (!state) return;
