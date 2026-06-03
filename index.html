@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.9.0</title>
+<title>으리챗 난투전 — 프로토타입 v0.9.1</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -147,7 +147,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.9.0</p>
+    <p id="headerSub">프로토타입 v0.9.1</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -241,6 +241,7 @@
   <div class="modal">
     <h2>공격받았다!</h2>
     <p id="reactDesc">—</p>
+    <div id="reactTimer" style="text-align:center;color:var(--gold);font-family:'Black Han Sans';font-size:.9rem;min-height:1.2em;margin-bottom:6px"></div>
     <div class="react-cards" id="reactCards"></div>
   </div>
 </div>
@@ -323,6 +324,7 @@ const CHARACTERS = [
 
 const TYPE_TIMING = { ATK:"MyTurn", ALL:"MyTurn", HEAL:"MyTurn", DEF:"OnHit", REFLECT:"OnHit", Bounce:"OnHit" };
 const CONFIG = { startHp:80, handSize:5, maxHand:6 };
+const RESPONSE_TIMEOUT = 30000;   // 피격 응답 제한시간(ms). 초과 시 owner가 자동 '맞기' 집행
 const AI_IDS  = ["ai1","ai2","ai3"];
 const AI_NAMES = ["상대A","상대B","상대C"];
 
@@ -1362,14 +1364,23 @@ function normalizeChoice(c) {
 }
 
 // owner: askDefense에서 await 게시 후 input 기다림
-function waitForInput(index) {
+// owner 전용. timeoutMs 경과 시 자동 'take'(맞기)로 resolve → 게임 멈춤 방지(기획 6장).
+function waitForInput(index, timeoutMs) {
   return new Promise(resolve => {
     const ref = db.ref('rooms/' + roomId + '/action/input');
+    let done = false, timer = null;
+    const finish = (val) => {
+      if (done) return; done = true;
+      ref.off('value', cb);
+      if (timer) clearTimeout(timer);
+      resolve(val);
+    };
     const cb = snap => {
       const inp = snap.val();
-      if (inp && inp.index === index) { ref.off('value', cb); resolve(normalizeChoice(inp.choice)); }
+      if (inp && inp.index === index) finish(normalizeChoice(inp.choice));
     };
     ref.on('value', cb);
+    if (timeoutMs) timer = setTimeout(() => finish('take'), timeoutMs);
   });
 }
 // spectator: owner가 큐에 반응 이벤트를 splice하고 resolved 표시할 때까지 대기 → 갱신된 큐 반환
@@ -1407,14 +1418,34 @@ function watchAwait() {
     if (aw && aw.target === myUid) {
       if (awaitModalIndex === aw.index) return;   // 이미 이 index 모달 열림
       awaitModalIndex = aw.index;
-      const reactions = getReactionCards(myUid, aw.aoe);   // Stage2: DEF/REFLECT/Bounce 모두 허용
+      const reactions = getReactionCards(myUid, aw.aoe);   // DEF/REFLECT/Bounce 모두 허용
       openDefenseModal(aw.attacker, myUid, aw.item, aw.incoming, reactions,
-        choice => { awaitModalIndex = null; submitOnlineInput(aw.index, choice); });
+        choice => { awaitModalIndex = null; stopReactCountdown(); submitOnlineInput(aw.index, choice); });
+      startReactCountdown(Math.floor(RESPONSE_TIMEOUT / 1000));   // 응답 카운트다운(코스메틱)
     } else {
       // await 해제(resolve 후) 또는 내 차례 아님 → 모달 닫기
-      if (awaitModalIndex !== null) { closeReactModal(); awaitModalIndex = null; }
+      if (awaitModalIndex !== null) { closeReactModal(); awaitModalIndex = null; stopReactCountdown(); }
     }
   });
+}
+
+let reactTimerInterval = null;
+function startReactCountdown(sec) {
+  stopReactCountdown();
+  const el = document.getElementById('reactTimer');
+  let left = sec;
+  const tick = () => {
+    if (el) el.textContent = `⏳ ${left}초 내 미응답 시 자동 '맞기'`;
+    if (left <= 0) { stopReactCountdown(); return; }
+    left--;
+  };
+  tick();
+  reactTimerInterval = setInterval(tick, 1000);
+}
+function stopReactCountdown() {
+  if (reactTimerInterval) { clearInterval(reactTimerInterval); reactTimerInterval = null; }
+  const el = document.getElementById('reactTimer');
+  if (el) el.textContent = '';
 }
 
 // 온라인 재생기: 모든 클라가 동일 큐 재생. askDefense만 transport 분기.
@@ -1458,7 +1489,7 @@ async function playOnlineAction(act) {
             incoming:ev.incoming, aoe:ev.aoe || false, chain:ev.chain || false
           });
           setStatus(`${state.players[ev.target]?.name || '?'}의 응답 대기...`);
-          const choice = await waitForInput(i);
+          const choice = await waitForInput(i, RESPONSE_TIMEOUT);   // 30초 초과 시 자동 '맞기'
           const reactEvents = buildReactionEvents(ev.attacker, ev.target, ev.item, ev.incoming, choice, ev.aoe);
           q.splice(i + 1, 0, ...reactEvents);
           q[i] = { ...ev, resolved:true };
