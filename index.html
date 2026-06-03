@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.9.1</title>
+<title>으리챗 난투전 — 프로토타입 v0.9.2</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -147,7 +147,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.9.1</p>
+    <p id="headerSub">프로토타입 v0.9.2</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -444,6 +444,7 @@ async function createRoom() {
   }
   roomId = code; isHost = true;
   gameMode = 'online';
+  saveSession();
   await db.ref('rooms/' + roomId).set({
     host: myUid, phase:'waiting',
     players: { [myUid]: { name:myName, characterId:null } }
@@ -472,9 +473,45 @@ async function joinRoom() {
   if (Object.keys(data.players || {}).length >= 4) { setLobbyError('방이 가득 찼습니다 (최대 4명)'); return; }
   roomId = code; isHost = data.host === myUid;
   gameMode = 'online';
+  saveSession();
   await db.ref('rooms/' + roomId + '/players/' + myUid).set({ name:myName, characterId:null });
   listenRoom();
   showScreen('waiting');
+}
+
+// ── 새로고침 복구 (Stage 5b) ──────────────────────────────────
+function saveSession()  { sessionStorage.setItem('euri_room', roomId); sessionStorage.setItem('euri_name', myName); }
+function clearSession() { sessionStorage.removeItem('euri_room'); sessionStorage.removeItem('euri_name'); }
+
+// 페이지 로드 시 진행 중이던 온라인 방으로 자동 복귀
+async function tryRejoinOnline() {
+  if (!FB_READY) return;
+  const savedRoom = sessionStorage.getItem('euri_room');
+  if (!savedRoom) return;
+  roomId = savedRoom;
+  myName = sessionStorage.getItem('euri_name') || '플레이어';
+  gameMode = 'online';
+
+  const data = (await db.ref('rooms/' + roomId).once('value')).val();
+  // 방 없음 / 끝난 게임 / 내가 멤버 아님 → 복구 취소
+  if (!data || !data.players || !data.players[myUid] || data.phase === 'finished') {
+    clearSession(); roomId = null; gameMode = 'local'; return;
+  }
+  isHost = data.host === myUid;
+
+  // 진행 중 action이 있으면 재생 생략(snap). onlineSeq를 현재 seq로 맞춰 재생 트리거 방지.
+  if (data.action) {
+    onlineSeq = data.action.seq || 0;
+    // 내가 그 action의 AP(owner)였다면 내 재생 루프가 사라져 stuck → 취소(done:true).
+    // DB players는 재생 중 데미지가 반영 안 되므로(commit 전) 취소 시 깔끔히 직전 상태로 복귀.
+    if (data.action.done === false) {
+      const ap = toArr(data.turnOrder)[data.currentTurnIndex || 0];
+      if (ap === myUid) {
+        await db.ref('rooms/' + roomId).update({ 'action/done': true, 'action/await': null });
+      }
+    }
+  }
+  listenRoom();   // onRoomData가 현 상태로 스냅 + watchAwait 시작
 }
 
 function setLobbyError(msg) { document.getElementById('lobbyError').textContent = msg; }
@@ -660,6 +697,7 @@ async function onlineNextTurn() {
 
 // ── 승리 화면 ────────────────────────────────────────────────
 function showWin() {
+  clearSession();   // 게임 종료 → 새로고침 시 자동 복귀 안 함
   const meId = gameMode === 'online' ? myUid : 'you';
   const won  = state.winner === meId;
   const winnerName = state.winner ? (state.players[state.winner]?.name||'?') : '없음';
@@ -1383,12 +1421,14 @@ function waitForInput(index, timeoutMs) {
     if (timeoutMs) timer = setTimeout(() => finish('take'), timeoutMs);
   });
 }
-// spectator: owner가 큐에 반응 이벤트를 splice하고 resolved 표시할 때까지 대기 → 갱신된 큐 반환
+// spectator: owner가 큐에 반응 이벤트를 splice하고 resolved 표시할 때까지 대기 → 갱신된 큐 반환.
+// action.done===true(=owner 이탈로 취소)면 'ABORT' 반환 → 재생 루프 탈출.
 function waitForResolved(index) {
   return new Promise(resolve => {
     const ref = actionRef();
     const cb = snap => {
       const a = snap.val(); if (!a) return;
+      if (a.done === true) { ref.off('value', cb); resolve('ABORT'); return; }
       const q = toArr(a.queue);
       if (q[index] && q[index].resolved) { ref.off('value', cb); resolve(q); }
     };
@@ -1498,7 +1538,9 @@ async function playOnlineAction(act) {
       } else {
         // spectator: 모달은 watchAwait가 띄움. 여기선 owner의 resolve만 대기.
         setStatus(`${state.players[ev.target]?.name || '?'}의 응답 대기...`);
-        q = await waitForResolved(i);
+        const r = await waitForResolved(i);
+        if (r === 'ABORT') break;   // owner 이탈로 action 취소됨 → 재생 중단
+        q = r;
       }
       i++; continue;
     }
@@ -1806,6 +1848,7 @@ if (!FB_READY) {
   document.getElementById('onlineModeCard').title = 'Firebase 설정 필요';
 }
 renderLocalCharSelect();
+tryRejoinOnline();   // 새로고침 시 진행 중이던 온라인 방으로 복귀 (Stage 5b)
 </script>
 </body>
 </html>
