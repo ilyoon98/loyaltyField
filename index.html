@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.8.3</title>
+<title>으리챗 난투전 — 프로토타입 v0.9.0</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -147,7 +147,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.8.3</p>
+    <p id="headerSub">프로토타입 v0.9.0</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -1140,6 +1140,8 @@ async function renderEventVisual(ev, q, i) {
     render(); await sleep(900);
 
   } else if (ev.kind === 'hitcheck') {
+    // 죽은 대상 skip (ALL build 시점 이후 연쇄로 먼저 죽은 경우). owner/spectator 동일 판정.
+    if (!state.players[ev.target]?.alive) return;
     if (ev.aoe) {
       if (ev.hit) {
         setQueueHighlight(queueHighlight.attacker, ev.target);
@@ -1213,6 +1215,8 @@ async function playQueue(q, onDone) {
     const ev = q[i];
 
     if (ev.kind === 'askDefense') {
+      // 죽은 대상에겐 방어 요청 안 함 (ALL build 이후 연쇄로 먼저 죽은 경우)
+      if (!state.players[ev.target]?.alive) continue;   // for 루프가 i++ 처리
       setQueueHighlight(ev.attacker, ev.target);
       if (ev.chain && chainCount >= 20) {
         showStageCenter('⛔ 연쇄 종료!', 'miss');
@@ -1303,7 +1307,7 @@ function checkWinOnline() {
 // ══════════════════════════════════════════════════════════════
 // 온라인 액션(큐) — 기획 12-1. owner(현재 AP)가 큐를 만들고 랜덤을 baking,
 // DB에 올리면 모든 클라가 동일 재생. askDefense에서 피격자 입력을 DB로 주고받음.
-// Stage 1: 단일 ATK / HEAL, 반응은 방어(DEF)/맞기만. (ALL·반사·튕기기는 다음 단계)
+// Stage 3: 단일 ATK / HEAL / ALL, 반응은 방어/반사/튕기기(연쇄)/맞기 전부 지원.
 // ══════════════════════════════════════════════════════════════
 const actionRef = () => db.ref('rooms/' + roomId + '/action');
 
@@ -1315,13 +1319,12 @@ function buildHealQueue(actorId, key) {
 // owner 진입점: 카드 확정 후 호출. 트랜잭션 가드로 "내가 진짜 AP인지" 원자적 확인 후 큐 업로드.
 async function startOnlineAction(attackerId, targetId, key) {
   const def = CARD_DEFS[key];
-  // Stage 1 미지원 차단 (옛 forEach/pendingAction 경로 제거 — 명시적으로 막음)
-  if (def.type === 'ALL') { setStatus('전체공격은 아직 온라인 미지원입니다'); render(); return; }
   if (TYPE_TIMING[def.type] !== 'MyTurn') { setStatus('아직 온라인 미지원입니다'); render(); return; }
 
   let queue;
   if (def.type === 'HEAL')      queue = buildHealQueue(attackerId, key);
   else if (def.type === 'ATK')  queue = buildAtkQueue(attackerId, targetId, key);
+  else if (def.type === 'ALL')  queue = buildAllQueue(attackerId, key);   // Stage 3: 전체공격
   else { setStatus('아직 온라인 미지원입니다'); render(); return; }
 
   const ok = await claimAndUploadQueue(queue);
@@ -1430,6 +1433,9 @@ async function playOnlineAction(act) {
     const ev = q[i];
 
     if (ev.kind === 'askDefense' && !ev.resolved) {
+      // 죽은 대상 skip (ALL build 이후 연쇄로 먼저 죽은 경우). owner/spectator 동일 판정 →
+      // owner는 await 안 띄우고, spectator도 waitForResolved 없이 넘어가 lockstep 유지.
+      if (!state.players[ev.target]?.alive) { i++; continue; }
       setQueueHighlight(ev.attacker, ev.target);
 
       if (amOwner()) {
