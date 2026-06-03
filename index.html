@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.8.2</title>
+<title>으리챗 난투전 — 프로토타입 v0.8.3</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -125,13 +125,29 @@
   .room-code-big:hover{border-color:var(--gold)}
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media(max-width:560px){.two-col{grid-template-columns:1fr}.mode-grid{flex-direction:column;align-items:center}}
+  /* 치트 패널 (테스트 전용, 평소 숨김) */
+  #cheatBtn{position:fixed;right:14px;bottom:14px;z-index:80;display:none;
+    background:#7a3b8f;color:#fff;border:2px solid #b06fc7;border-radius:10px;
+    padding:10px 14px;font-family:'Black Han Sans';font-size:.95rem;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+  #cheatBtn:hover{filter:brightness(1.15)}
+  #cheatPanel{position:fixed;right:14px;bottom:64px;z-index:80;display:none;width:300px;
+    background:var(--panel);border:2px solid #b06fc7;border-radius:12px;padding:16px;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+  #cheatPanel h3{font-family:'Black Han Sans';color:#d79bea;font-size:1.05rem;margin-bottom:6px}
+  #cheatPanel .cheat-sec{border-top:1px solid var(--line);margin-top:12px;padding-top:12px}
+  #cheatPanel label{display:block;font-size:.78rem;color:var(--muted);margin:6px 0 3px}
+  #cheatPanel select,#cheatPanel input{width:100%;padding:7px;background:var(--panel-light);
+    border:1px solid var(--line);border-radius:6px;color:var(--ink);font-size:.85rem;margin-bottom:4px}
+  #cheatPanel .cheat-apply{width:100%;padding:8px;margin-top:6px;background:#7a3b8f;color:#fff;
+    border:none;border-radius:7px;font-family:'Black Han Sans';cursor:pointer}
+  #cheatPanel .cheat-apply:hover{filter:brightness(1.15)}
+  #cheatMsg{font-size:.76rem;color:var(--gold);min-height:1.1em;margin-top:6px;text-align:center}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.8.2</p>
+    <p id="headerSub">프로토타입 v0.8.3</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -227,6 +243,24 @@
     <p id="reactDesc">—</p>
     <div class="react-cards" id="reactCards"></div>
   </div>
+</div>
+
+<!-- 치트 패널 (테스트 전용 — Ctrl+Shift+D 또는 제목 5연타로 토글) -->
+<button id="cheatBtn" onclick="toggleCheatPanel()">🛠 치트</button>
+<div id="cheatPanel">
+  <h3>🛠 테스트 치트</h3>
+  <div class="cheat-sec">
+    <label>내 손패에 카드 추가</label>
+    <select id="cheatCardSel"></select>
+    <button class="cheat-apply" onclick="cheatAddCard()">손패에 추가</button>
+  </div>
+  <div class="cheat-sec">
+    <label>플레이어 HP 설정</label>
+    <select id="cheatPlayerSel"></select>
+    <input id="cheatHpInput" type="number" min="0" max="999" placeholder="HP 값">
+    <button class="cheat-apply" onclick="cheatSetHp()">HP 적용</button>
+  </div>
+  <div id="cheatMsg"></div>
 </div>
 
 <!-- Firebase SDK -->
@@ -1624,6 +1658,109 @@ function appendLog(msg, kind) {
   line.textContent = '▸ ' + msg;
   box.appendChild(line);
   box.scrollTop = box.scrollHeight;
+}
+
+// ══════════════════════════════════════════════════════════════
+// 치트 패널 (테스트 전용) — 본 게임 로직 미변경, 값 주입만.
+// 온라인은 DB에 써서 양쪽 동기화(Stage 1~2 원칙). 재생 중엔 사용 금지.
+// ══════════════════════════════════════════════════════════════
+let cheatVisible = false;
+let titleClicks = 0, titleClickTimer = null;
+
+function revealCheat() {
+  cheatVisible = !cheatVisible;
+  document.getElementById('cheatBtn').style.display = cheatVisible ? 'block' : 'none';
+  if (!cheatVisible) {
+    document.getElementById('cheatPanel').style.display = 'none';
+  }
+}
+
+// 활성화 1: Ctrl+Shift+D
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+    e.preventDefault(); revealCheat();
+  }
+});
+// 활성화 2: 제목 5연타
+document.querySelector('header h1').addEventListener('click', () => {
+  titleClicks++;
+  clearTimeout(titleClickTimer);
+  titleClickTimer = setTimeout(() => { titleClicks = 0; }, 1500);
+  if (titleClicks >= 5) { titleClicks = 0; revealCheat(); }
+});
+
+function toggleCheatPanel() {
+  const panel = document.getElementById('cheatPanel');
+  const open = panel.style.display !== 'block';
+  if (open) refreshCheatPanel();
+  panel.style.display = open ? 'block' : 'none';
+}
+
+function cheatMsg(t) {
+  const el = document.getElementById('cheatMsg');
+  el.textContent = t;
+  setTimeout(() => { if (el.textContent === t) el.textContent = ''; }, 2500);
+}
+
+// 패널 열 때 카드/플레이어 목록 채우기
+function refreshCheatPanel() {
+  const cardSel = document.getElementById('cheatCardSel');
+  cardSel.innerHTML = '';
+  CARD_KEYS.forEach(k => {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = `${cardIcon(k)} ${CARD_DEFS[k].name} (${CARD_DEFS[k].type})`;
+    cardSel.appendChild(o);
+  });
+  const plSel = document.getElementById('cheatPlayerSel');
+  plSel.innerHTML = '';
+  if (state && state.turnOrder) {
+    state.turnOrder.forEach(id => {
+      const p = state.players[id]; if (!p) return;
+      const o = document.createElement('option');
+      o.value = id; o.textContent = `${p.name} (HP ${p.hp}${p.alive ? '' : ' 💀'})`;
+      plSel.appendChild(o);
+    });
+  }
+}
+
+// 온라인에서 재생 중이면 치트 금지 (desync 방지)
+function cheatGuard() {
+  if (!state) { cheatMsg('게임 중에만 사용 가능'); return false; }
+  if (gameMode === 'online' && onlineReplaying) { cheatMsg('재생 중에는 사용 불가'); return false; }
+  return true;
+}
+
+function cheatAddCard() {
+  if (!cheatGuard()) return;
+  const key = document.getElementById('cheatCardSel').value;
+  const myId = myPlayerId();
+  const me = state.players[myId];
+  if (!me) { cheatMsg('내 플레이어 없음'); return; }
+  if (gameMode === 'online') {
+    // DB 권위 write → 리스너가 양쪽 동기화
+    db.ref('rooms/' + roomId + '/players/' + myId + '/hand').transaction(h => {
+      const arr = toArr(h); arr.push(key); return arr;
+    });
+  } else {
+    me.hand = toArr(me.hand); me.hand.push(key); render();
+  }
+  cheatMsg(`${CARD_DEFS[key].name} 추가됨`);
+}
+
+function cheatSetHp() {
+  if (!cheatGuard()) return;
+  const id = document.getElementById('cheatPlayerSel').value;
+  const hp = parseInt(document.getElementById('cheatHpInput').value, 10);
+  if (isNaN(hp) || hp < 0) { cheatMsg('유효한 HP 값 입력'); return; }
+  if (!state.players[id]) { cheatMsg('플레이어 없음'); return; }
+  const alive = hp > 0;
+  if (gameMode === 'online') {
+    db.ref('rooms/' + roomId + '/players/' + id).update({ hp, alive });
+  } else {
+    state.players[id].hp = hp; state.players[id].alive = alive; render();
+  }
+  cheatMsg(`${state.players[id].name} HP=${hp}`);
+  refreshCheatPanel();
 }
 
 // ── 초기화 ───────────────────────────────────────────────────
