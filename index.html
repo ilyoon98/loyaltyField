@@ -330,6 +330,7 @@ const CHARACTERS = [
 const TYPE_TIMING = { ATK:"MyTurn", ALL:"MyTurn", HEAL:"MyTurn", DEF:"OnHit", REFLECT:"OnHit", Bounce:"OnHit" };
 const CONFIG = { startHp:80, handSize:5, maxHand:6 };
 const RESPONSE_TIMEOUT = 30000;   // 피격 응답 제한시간(ms). 초과 시 owner가 자동 '맞기' 집행
+const SKIP_GRACE       = 5000;    // idle AP 끊김 후 턴 스킵까지 유예(ms). 5c-2. (탈락은 5c-4의 더 긴 유예)
 const AI_IDS  = ["ai1","ai2","ai3"];
 const AI_NAMES = ["상대A","상대B","상대C"];
 
@@ -559,6 +560,7 @@ function watchPresence() {
   db.ref('rooms/' + roomId + '/presence').on('value', snap => {
     presenceMap = snap.val() || {};
     applyPresenceUI();
+    checkAPRecovery();   // 5c-2: AP 끊김 감지(presence 변화 트리거)
   });
 }
 
@@ -579,6 +581,63 @@ function applyPresenceUI() {
     }
     const row = document.querySelector('.waiting-player[data-uid="' + uid + '"]');
     if (row) row.classList.toggle('disconnected', off);
+  });
+}
+
+// ── 5c-2: idle AP 끊김 → 턴 스킵 (권위자 단일 게이트 + 트랜잭션 재검증) ──
+let apRecoveryTimer = null;
+
+// 연결된 생존자 중 turnOrder 최소 인덱스가 나인가 = 결정적 단일 권위자.
+// (끊긴 권위자는 connected:false라 자동 제외 → 다음 사람이 승계)
+function amRecoveryAuthority() {
+  if (gameMode !== 'online' || !state || !state.turnOrder) return false;
+  for (const id of state.turnOrder) {
+    const p = state.players[id];
+    if (!p || !p.alive) continue;
+    if (presenceMap[id] && presenceMap[id].connected === false) continue;
+    return id === myUid;
+  }
+  return false;
+}
+
+// AP가 끊김+idle이면 SKIP_GRACE 후 턴 스킵. presence 변화·room 변화 양쪽에서 호출.
+function checkAPRecovery() {
+  if (apRecoveryTimer) { clearTimeout(apRecoveryTimer); apRecoveryTimer = null; }
+  if (gameMode !== 'online' || !state || state.phase !== 'playing') return;
+  if (onlineReplaying) return;                         // 행동 중(action 진행) — 5c-3 영역, 무시
+  const ap = state.turnOrder[state.currentTurnIndex];
+  const apPres = presenceMap[ap];
+  if (!apPres || apPres.connected !== false) return;   // AP 연결됨/미상 → 할 일 없음
+  if (!amRecoveryAuthority()) return;                  // 권위자만 시도(최적화; 진짜 보장은 트랜잭션)
+  const elapsed = Date.now() - (apPres.lastSeen || 0);
+  if (elapsed >= SKIP_GRACE) {
+    skipDisconnectedAP(ap);
+  } else {
+    // 유예 남음 → 남은 시간 후 재평가 (그 사이 복귀하면 presence 변화로 재호출돼 자연 취소)
+    apRecoveryTimer = setTimeout(checkAPRecovery, SKIP_GRACE - elapsed + 100);
+  }
+}
+
+// 트랜잭션: 전제(AP 여전히 끊김 + 유예 경과 + idle) atomic 재검증 후 턴 전진. alive 불변(탈락은 5c-4).
+async function skipDisconnectedAP(ap) {
+  const now = Date.now();
+  await db.ref('rooms/' + roomId).transaction(data => {
+    if (!data) return;
+    const order = toArr(data.turnOrder);
+    if (order[data.currentTurnIndex || 0] !== ap) return;       // 이미 턴 넘어감 → abort
+    const pres = data.presence && data.presence[ap];
+    if (!pres || pres.connected !== false) return;              // 재접속함 → abort (Q3)
+    if (now - (pres.lastSeen || 0) < SKIP_GRACE) return;        // 유예 전 → abort
+    if (data.action && data.action.done === false) return;      // 행동 중 → 5c-2 아님 → abort (Q2)
+    let idx = (data.currentTurnIndex + 1) % order.length;
+    for (let t = 0; t < order.length; t++) {
+      if (data.players[order[idx]].alive) break;
+      idx = (idx + 1) % order.length;
+    }
+    data.currentTurnIndex = idx;
+    const nm = (data.players[ap] && data.players[ap].name) || '?';
+    data.log = [...toArr(data.log), `${nm} 연결 끊김 — 턴 스킵`];
+    return data;
   });
 }
 
@@ -713,6 +772,7 @@ function onRoomData(data) {
   const curId = state.turnOrder[state.currentTurnIndex];
   if (curId === myUid) setStatus('내 턴 — 카드를 사용하거나 패스하세요');
   else                 setStatus(`${state.players[curId]?.name || '?'}의 턴...`);
+  checkAPRecovery();   // 5c-2: 턴이 이미-끊긴 AP에게 넘어온 경우도 감지
 }
 
 function classifyLog(msg) {
