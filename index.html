@@ -422,7 +422,7 @@ function startLocalGame() {
   AI_IDS.forEach((id, i) => {
     players[id] = { name:AI_NAMES[i], characterId:aiChars[i], hp:CONFIG.startHp, alive:true, hand:newHand(CONFIG.handSize) };
   });
-  state = { phase:"playing", turnOrder:["you",...AI_IDS], currentTurnIndex:0, pendingAction:null, players, log:[], winner:null };
+  state = { phase:"playing", turnOrder:["you",...AI_IDS], currentTurnIndex:0, players, log:[], winner:null };
   pendingCardUse = null;
   document.getElementById('logBox').innerHTML = '';
   showScreen('battle');
@@ -599,7 +599,7 @@ async function startOnlineGame() {
   const logObj = { 0:`게임 시작! 순서: ${turnOrder.map(u=>players[u].name).join(' → ')}` };
   await db.ref('rooms/'+roomId).update({
     phase:'playing', players, turnOrder, currentTurnIndex:0,
-    pendingAction:null, log:logObj, winner:null
+    log:logObj, winner:null
   });
 }
 
@@ -615,7 +615,6 @@ function syncStateFromData(data) {
     players: data.players || {},
     turnOrder: toArr(data.turnOrder),
     currentTurnIndex: data.currentTurnIndex || 0,
-    pendingAction: null,
     log: logArr,
     winner: data.winner || null,
   };
@@ -668,31 +667,6 @@ function classifyLog(msg) {
   if (msg.includes('반사') || msg.includes('떠넘김')) return 'ref';
   if (msg.includes('빗나감')) return 'miss';
   return 'sys';
-}
-
-// ── Firebase 동기화 ───────────────────────────────────────────
-async function syncOnline() {
-  const logObj = {};
-  state.log.forEach((v,i) => { logObj[i] = v; });
-  await db.ref('rooms/'+roomId).update({
-    phase: state.phase,
-    players: state.players,
-    turnOrder: state.turnOrder,
-    currentTurnIndex: state.currentTurnIndex,
-    pendingAction: null,
-    log: logObj,
-    winner: state.winner || null,
-  });
-}
-
-async function onlineNextTurn() {
-  let idx = (state.currentTurnIndex + 1) % state.turnOrder.length;
-  for (let t = 0; t < state.turnOrder.length; t++) {
-    if (state.players[state.turnOrder[idx]].alive) break;
-    idx = (idx + 1) % state.turnOrder.length;
-  }
-  state.currentTurnIndex = idx;
-  await syncOnline();
 }
 
 // ── 승리 화면 ────────────────────────────────────────────────
@@ -815,90 +789,7 @@ function getReactionCards(playerId, aoe) {
     .filter(o => TYPE_TIMING[CARD_DEFS[o.k]?.type] === 'OnHit');
 }
 
-function offerReaction(attackerId, targetId, atkKey, dmg) {
-  const reactions = getReactionCards(targetId);
-  if (targetId === 'you') {
-    openReactModal(attackerId, targetId, atkKey, dmg, reactions);
-  } else {
-    let choice = 'take';
-    if (reactions.length > 0 && Math.random() < 0.5)
-      choice = reactions[Math.floor(Math.random() * reactions.length)];
-    applyReaction(attackerId, targetId, atkKey, dmg, choice);
-  }
-}
-
-function openReactModal(attackerId, targetId, atkKey, dmg, reactions) {
-  document.getElementById('reactDesc').textContent =
-    `${state.players[attackerId].name}의 ${CARD_DEFS[atkKey].name} — ${dmg} 데미지가 들어옵니다!`;
-  const box = document.getElementById('reactCards');
-  box.innerHTML = '';
-
-  const takeBtn = document.createElement('div');
-  takeBtn.className = 'react-opt';
-  takeBtn.innerHTML = `<b>그냥 맞기</b> — HP ${dmg} 감소`;
-  takeBtn.onclick = () => { closeReactModal(); applyReaction(attackerId, targetId, atkKey, dmg, 'take'); };
-  box.appendChild(takeBtn);
-
-  reactions.forEach(o => {
-    const d = CARD_DEFS[o.k];
-    const tChar = state.players[targetId].characterId;
-    const btn = document.createElement('div');
-    btn.className = 'react-opt';
-    let label = `<b>${d.name}</b> (${d.type}) — `;
-    if (d.type === 'DEF')     label += `데미지 ${effValue(o.k,tChar)} 경감`;
-    if (d.type === 'REFLECT') label += `공격자에게 그대로 반사`;
-    if (d.type === 'Bounce')  label += `랜덤 대상에게 떠넘김`;
-    btn.innerHTML = label;
-    btn.onclick = () => { closeReactModal(); applyReaction(attackerId, targetId, atkKey, dmg, o); };
-    box.appendChild(btn);
-  });
-
-  document.getElementById('reactOverlay').classList.add('active');
-}
 function closeReactModal() { document.getElementById('reactOverlay').classList.remove('active'); }
-
-function applyReaction(attackerId, targetId, atkKey, dmg, choice) {
-  const tName = state.players[targetId].name;
-
-  const afterReaction = () => {
-    state.pendingAction = null;
-    render();
-    if (gameMode === 'online') { if (!checkWinOnline()) syncOnline().then(() => onlineNextTurn()); }
-    else finishAction(attackerId);
-  };
-
-  if (choice === 'take') {
-    applyDamage(targetId, dmg, attackerId, CARD_DEFS[atkKey].name);
-    afterReaction(); return;
-  }
-
-  const tHand = state.players[targetId].hand;
-  const idx = tHand.indexOf(choice.k);
-  if (idx >= 0) { tHand.splice(idx,1); tHand.push(drawCard()); }
-  const rDef = CARD_DEFS[choice.k];
-  const tChar = state.players[targetId].characterId;
-
-  if (rDef.type === 'DEF') {
-    const reduce = effValue(choice.k, tChar);
-    const final  = Math.max(0, dmg - reduce);
-    pushLog(`${tName}: ${rDef.name}으로 방어 (−${reduce}) → ${final} 피해`, 'block');
-    if (final > 0) applyDamage(targetId, final, attackerId, '관통');
-    afterReaction(); return;
-  }
-  if (rDef.type === 'REFLECT') {
-    pushLog(`${tName}: ${rDef.name}! 공격자에게 ${dmg} 반사`, 'ref');
-    applyDamage(attackerId, dmg, targetId, '반사');
-    afterReaction(); return;
-  }
-  if (rDef.type === 'Bounce') {
-    let nT = 1;
-    if (rDef.trigger === tChar && rDef.plusType === 'Target') nT += rDef.plusValue;
-    const alive = state.turnOrder.filter(id => state.players[id].alive);
-    pushLog(`${tName}: ${rDef.name}! ${dmg} 데미지를 랜덤 ${nT}명에게 떠넘김`, 'ref');
-    for (let n = 0; n < nT; n++) applyDamage(alive[Math.floor(Math.random()*alive.length)], dmg, targetId, '떠넘김');
-    afterReaction(); return;
-  }
-}
 
 // ── 데미지 적용 ───────────────────────────────────────────────
 function applyDamage(targetId, dmg, sourceId, label) {
@@ -1292,13 +1183,6 @@ async function playQueue(q, onDone) {
   if (onDone) onDone();
 }
 
-// ── 행동 종료 (로컬) ──────────────────────────────────────────
-function finishAction(actorId) {
-  render();
-  if (checkWin()) return;
-  setTimeout(nextTurn, 700);
-}
-
 // ── AI 턴 ─────────────────────────────────────────────────────
 function aiTurn() {
   const curId = state.turnOrder[state.currentTurnIndex];
@@ -1332,14 +1216,6 @@ function checkWin() {
   if (alive.length <= 1) {
     state.phase = 'finished'; state.winner = alive[0] || null;
     showWin(); return true;
-  }
-  return false;
-}
-function checkWinOnline() {
-  const alive = state.turnOrder.filter(id => state.players[id].alive);
-  if (alive.length <= 1) {
-    state.phase = 'finished'; state.winner = alive[0] || null;
-    syncOnline(); showWin(); return true;
   }
   return false;
 }
@@ -1709,8 +1585,6 @@ function clearAllZones() {
   setZone('stageCenter', '', '');
   setZone('stageRight',  '', '');
 }
-// 하위 호환 — 온라인 경로 등 남은 호출용 (로컬 큐는 직접 쓰지 않음)
-function showStage(html, cls) { showStageLeft(html, cls); }
 function clearStage() { clearAllZones(); }
 // 플레이어 카드 위로 데미지/회복 숫자가 튀어오름
 function floatNumber(targetId, amount, isHeal) {
