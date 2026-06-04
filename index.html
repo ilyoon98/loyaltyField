@@ -36,6 +36,11 @@
   .pl{background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:14px;transition:.2s;position:relative}
   .pl.active-turn{border-color:var(--gold);box-shadow:0 0 0 2px var(--gold),0 0 22px rgba(232,184,75,.55)}
   .pl.dead{opacity:.35;filter:grayscale(1)}
+  /* 접속 끊김 (5c-1) — dead와 구분: 더 옅게 회색 처리, 라벨 표시 */
+  .pl.disconnected{opacity:.5;filter:grayscale(.7)}
+  .pl .disc-tag{position:absolute;top:8px;right:8px;background:var(--red);color:#fff;font-size:.62rem;
+    padding:2px 6px;border-radius:8px;font-weight:bold;letter-spacing:.3px}
+  .waiting-player.disconnected{opacity:.55}
   .pl.targetable{border-color:var(--red);cursor:pointer;box-shadow:0 0 14px rgba(214,84,63,.4)}
   .pl.targetable:hover{transform:translateY(-3px);box-shadow:0 0 22px rgba(214,84,63,.7)}
   /* 큐 재생 중 피격자 강조 */
@@ -352,6 +357,9 @@ let onlineReplaying = false;    // 온라인 큐 재생 중
 let onlineLocalLogOnly = false; // 온라인 재생 중 로그는 DOM에만 (DB 미기록)
 let awaitWatchStarted = false;  // watchAwait 상설 리스너 시작 여부
 let awaitModalIndex = null;     // 현재 열린 응답 모달의 await index
+// presence (5c-1): players/action/commit 경로와 분리된 별도 노드. 순수 감지+표시.
+let presenceMap = {};           // { uid: {connected, lastSeen} } — watchPresence가 갱신
+let presenceStarted = false;    // startPresence/watchPresence 1회 가드
 
 // ── 화면 전환 ────────────────────────────────────────────────
 function showScreen(name) {
@@ -526,6 +534,52 @@ function listenRoom() {
     if (data.phase === 'waiting') renderWaitingRoom(data);
     else onRoomData(data);
   });
+  startPresence();   // 5c-1: 입장 즉시 presence 활성 (대기실부터)
+}
+
+// ── presence (5c-1) ───────────────────────────────────────────
+// .info/connected로 onDisconnect 자동 재무장 + 별도 presence 노드 감시.
+// 게임 상태는 일절 안 건드림 — 순수 감지/표시. 권위·복구는 5c-2~4.
+function startPresence() {
+  if (presenceStarted || !roomId) return;
+  presenceStarted = true;
+  const ServerValue = firebase.database.ServerValue;
+  db.ref('.info/connected').on('value', snap => {
+    if (snap.val() !== true || !roomId) return;
+    const pref = db.ref('rooms/' + roomId + '/presence/' + myUid);
+    // 끊기면 서버가 실행(=감지 시각이 lastSeen에 박힘) → 5c-4 권위자가 grace 판정
+    pref.onDisconnect().set({ connected:false, lastSeen: ServerValue.TIMESTAMP });
+    pref.set({ connected:true, lastSeen: ServerValue.TIMESTAMP });
+  });
+  watchPresence();
+}
+
+// 별도 경로 상설 리스너 → onlineReplaying 가드와 무관(재생 중에도 감지). watchAwait와 동일 패턴.
+function watchPresence() {
+  db.ref('rooms/' + roomId + '/presence').on('value', snap => {
+    presenceMap = snap.val() || {};
+    applyPresenceUI();
+  });
+}
+
+// 타겟 DOM 패치만 (full render 안 함 → 재생 연출과 안 싸움). 전투/대기실 양쪽 갱신.
+function applyPresenceUI() {
+  Object.keys(presenceMap).forEach(uid => {
+    const off = presenceMap[uid] && presenceMap[uid].connected === false;
+    const card = document.getElementById('pl-' + uid);
+    if (card) {
+      card.classList.toggle('disconnected', off);
+      let tag = card.querySelector('.disc-tag');
+      if (off && !tag) {
+        tag = document.createElement('div');
+        tag.className = 'disc-tag';
+        tag.textContent = '🔌 연결 끊김';
+        card.appendChild(tag);
+      } else if (!off && tag) { tag.remove(); }
+    }
+    const row = document.querySelector('.waiting-player[data-uid="' + uid + '"]');
+    if (row) row.classList.toggle('disconnected', off);
+  });
 }
 
 // ── 대기실 렌더링 ─────────────────────────────────────────────
@@ -537,9 +591,11 @@ function renderWaitingRoom(data) {
   list.innerHTML = '';
   Object.entries(data.players || {}).forEach(([uid, p]) => {
     const div = document.createElement('div');
-    div.className = 'waiting-player';
+    const off = presenceMap[uid] && presenceMap[uid].connected === false;
+    div.className = 'waiting-player' + (off ? ' disconnected' : '');
+    div.dataset.uid = uid;
     const me = uid === myUid;
-    div.innerHTML = `<span style="color:${me?'var(--blue)':'var(--ink)'}">${p.name}${uid===data.host?' 👑':''}</span><span style="color:var(--muted);font-size:.8rem">${p.characterId||'선택 중...'}</span>`;
+    div.innerHTML = `<span style="color:${me?'var(--blue)':'var(--ink)'}">${p.name}${uid===data.host?' 👑':''}${off?' 🔌':''}</span><span style="color:var(--muted);font-size:.8rem">${p.characterId||'선택 중...'}</span>`;
     list.appendChild(div);
   });
 
@@ -1517,6 +1573,8 @@ function render() {
     if (isAct) cls += ' active-turn';
     if (isPlaying && id === queueHighlight.targeted) cls += ' targeted';
     if (!p.alive) cls += ' dead';
+    const off = presenceMap[id] && presenceMap[id].connected === false;   // 5c-1
+    if (off) cls += ' disconnected';
     if (isTargetable) cls += ' targetable';
     const div = document.createElement('div');
     div.className = cls;
@@ -1529,7 +1587,8 @@ function render() {
       <div class="char-tag">${p.characterId}${isTargetable?' 👆 클릭하여 타겟':''}</div>
       <div class="hpbar"><div class="hpfill" style="width:${hpPct}%;background:linear-gradient(90deg,${hpCol},${hpCol}aa)"></div>
         <div class="hptext">${Math.max(0,p.hp)} / ${CONFIG.startHp}</div></div>
-      <div class="char-tag" style="margin-top:6px">손패 ${toArr(p.hand).length}장</div>`;
+      <div class="char-tag" style="margin-top:6px">손패 ${toArr(p.hand).length}장</div>
+      ${off ? '<div class="disc-tag">🔌 연결 끊김</div>' : ''}`;
     if (isTargetable) div.onclick = () => selectTarget(id);
     box.appendChild(div);
   });
