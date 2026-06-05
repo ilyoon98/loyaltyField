@@ -331,6 +331,7 @@ const TYPE_TIMING = { ATK:"MyTurn", ALL:"MyTurn", HEAL:"MyTurn", DEF:"OnHit", RE
 const CONFIG = { startHp:80, handSize:5, maxHand:6 };
 const RESPONSE_TIMEOUT = 30000;   // 피격 응답 제한시간(ms). 초과 시 owner가 자동 '맞기' 집행
 const SKIP_GRACE       = 5000;    // idle AP 끊김 후 턴 스킵까지 유예(ms). 5c-2. (탈락은 5c-4의 더 긴 유예)
+const ABORT_GRACE      = 0;       // owner 행동 중 끊김 → action abort 유예(ms). 5c-3. 0=즉시(묶인 spectator 즉시 해제)
 const AI_IDS  = ["ai1","ai2","ai3"];
 const AI_NAMES = ["상대A","상대B","상대C"];
 
@@ -560,7 +561,8 @@ function watchPresence() {
   db.ref('rooms/' + roomId + '/presence').on('value', snap => {
     presenceMap = snap.val() || {};
     applyPresenceUI();
-    checkAPRecovery();   // 5c-2: AP 끊김 감지(presence 변화 트리거)
+    checkAPRecovery();   // 5c-2: idle AP 끊김 → 턴 스킵
+    checkOwnerAbort();   // 5c-3: 행동 중 owner 끊김 → action abort (재생 중에도 도는 경로)
   });
 }
 
@@ -637,6 +639,40 @@ async function skipDisconnectedAP(ap) {
     data.currentTurnIndex = idx;
     const nm = (data.players[ap] && data.players[ap].name) || '?';
     data.log = [...toArr(data.log), `${nm} 연결 끊김 — 턴 스킵`];
+    return data;
+  });
+}
+
+// ── 5c-3: owner 행동 중 끊김 → action abort (묶인 spectator 해제) ──
+// 재생 중(onlineReplaying) 일어나므로 checkAPRecovery와 별개 경로. 턴 처리는 5c-2에 위임.
+let ownerAbortTimer = null;
+function checkOwnerAbort() {
+  if (ownerAbortTimer) { clearTimeout(ownerAbortTimer); ownerAbortTimer = null; }
+  if (gameMode !== 'online' || !state || !state.turnOrder) return;
+  const owner = state.turnOrder[state.currentTurnIndex];   // 재생 중 state 스냅샷 = action의 owner(AP)
+  const pres = presenceMap[owner];
+  if (!pres || pres.connected !== false) return;           // owner 연결됨 → 무관
+  if (!amRecoveryAuthority()) return;                       // 권위자만(진짜 보장은 트랜잭션)
+  const elapsed = Date.now() - (pres.lastSeen || 0);
+  if (elapsed >= ABORT_GRACE) abortOwnerAction(owner);     // 0=즉시
+  else ownerAbortTimer = setTimeout(checkOwnerAbort, ABORT_GRACE - elapsed + 50);
+}
+
+// 트랜잭션: in-flight action(done=false)의 owner가 끊겼으면 done=true로 종료.
+// → 묶인 spectator의 waitForResolved가 done===true 보고 'ABORT' 탈출(기존 경로). DB players는 pre-action 그대로.
+// 턴은 안 건드림 → abort 후 "idle + AP 끊김"이 되어 5c-2가 SKIP_GRACE 뒤 인수.
+async function abortOwnerAction(owner) {
+  await db.ref('rooms/' + roomId).transaction(data => {
+    if (!data || !data.action || data.action.done !== false) return;   // in-flight 아님 → abort
+    const order = toArr(data.turnOrder);
+    if (order[data.currentTurnIndex || 0] !== owner) return;           // owner가 AP 아님 → abort
+    if (data.action.ownerUid && data.action.ownerUid !== owner) return; // 방어적: ownerUid 불일치
+    const pres = data.presence && data.presence[owner];
+    if (!pres || pres.connected !== false) return;                     // 재접속 → abort
+    data.action.done = true;     // ★ 묶인 spectator 깨우기
+    data.action.await = null;    // askDefense 모달 떠있던 타겟의 watchAwait도 닫힘
+    const nm = (data.players[owner] && data.players[owner].name) || '?';
+    data.log = [...toArr(data.log), `${nm} 연결 끊김 — 행동 취소`];
     return data;
   });
 }
