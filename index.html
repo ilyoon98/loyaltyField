@@ -332,6 +332,7 @@ const CONFIG = { startHp:80, handSize:5, maxHand:6 };
 const RESPONSE_TIMEOUT = 30000;   // 피격 응답 제한시간(ms). 초과 시 owner가 자동 '맞기' 집행
 const SKIP_GRACE       = 5000;    // idle AP 끊김 후 턴 스킵까지 유예(ms). 5c-2. (탈락은 5c-4의 더 긴 유예)
 const ABORT_GRACE      = 0;       // owner 행동 중 끊김 → action abort 유예(ms). 5c-3. 0=즉시(묶인 spectator 즉시 해제)
+const ELIM_GRACE       = 30000;   // 끊김 후 탈락(alive=false)까지 유예(ms). 5c-4. (턴 스킵보다 길게)
 const AI_IDS  = ["ai1","ai2","ai3"];
 const AI_NAMES = ["상대A","상대B","상대C"];
 
@@ -563,6 +564,7 @@ function watchPresence() {
     applyPresenceUI();
     checkAPRecovery();   // 5c-2: idle AP 끊김 → 턴 스킵
     checkOwnerAbort();   // 5c-3: 행동 중 owner 끊김 → action abort (재생 중에도 도는 경로)
+    checkElimination();  // 5c-4: 끊김 30초 → 탈락 + 승패 재계산 + host 이양
   });
 }
 
@@ -677,6 +679,93 @@ async function abortOwnerAction(owner) {
   });
 }
 
+// ── 5c-4: 끊김 30초 경과 → 탈락 + 승패 재계산 + host 이양 ──
+// presence·room 변화 양쪽에서 호출. amRecoveryAuthority 단일 집행 + 트랜잭션 재검증.
+// in-flight action 중에는 보류(큐 target desync 방지) — 5c-3가 owner 끊김은 즉시 abort하므로 곧 풀림.
+let elimTimer = null;
+function checkElimination() {
+  if (elimTimer) { clearTimeout(elimTimer); elimTimer = null; }
+  if (gameMode !== 'online' || !state || state.phase !== 'playing') return;
+  if (onlineReplaying) return;                            // 행동 재생 중 → 정산 후 다시 평가
+  if (!amRecoveryAuthority()) return;                     // 권위자만(진짜 보장은 트랜잭션)
+  const now = Date.now();
+  let soonest = Infinity, anyExpired = false;
+  for (const id of state.turnOrder) {
+    const p = state.players[id];
+    if (!p || !p.alive) continue;
+    const pres = presenceMap[id];
+    if (!pres || pres.connected !== false) continue;      // 연결됨/미상 → 대상 아님
+    const elapsed = now - (pres.lastSeen || 0);
+    if (elapsed >= ELIM_GRACE) anyExpired = true;
+    else soonest = Math.min(soonest, ELIM_GRACE - elapsed);
+  }
+  if (anyExpired) { eliminateDisconnected(); return; }
+  if (soonest !== Infinity) elimTimer = setTimeout(checkElimination, soonest + 100);
+}
+
+// 단일 트랜잭션: 유예 경과한 끊김자 일괄 탈락 → 승패 재계산 → currentTurnIndex 보정 → host 이양.
+// 끊김으로 alive<=1 되면 마지막 끊긴 사람(lastSeen 최대) 우승. (전투 전멸 무효는 commitSettlement 담당)
+async function eliminateDisconnected() {
+  const now = Date.now();
+  await db.ref('rooms/' + roomId).transaction(data => {
+    if (!data || data.phase !== 'playing') return;
+    if (data.action && data.action.done === false) return;   // in-flight → 보류(abort)
+    const order = toArr(data.turnOrder);
+    // 1) 전제 재검증: 여전히 끊김 + 유예 경과 + alive 인 대상만
+    const victims = [];
+    order.forEach(id => {
+      const p = data.players[id];
+      if (!p || !p.alive) return;
+      const pres = data.presence && data.presence[id];
+      if (!pres || pres.connected !== false) return;
+      if (now - (pres.lastSeen || 0) < ELIM_GRACE) return;
+      victims.push(id);
+    });
+    if (!victims.length) return;                             // 전부 복귀/이미 처리됨 → abort
+    // 2) 탈락 적용
+    victims.forEach(id => { data.players[id].alive = false; });
+    const nm = id => (data.players[id] && data.players[id].name) || '?';
+    const logArr = toArr(data.log);
+    victims.forEach(id => logArr.push(`🔌 ${nm(id)} 30초 연결 끊김 — 탈락`));
+    // 3) 승패 재계산
+    const alive = order.filter(id => data.players[id].alive);
+    if (alive.length <= 1) {
+      data.phase = 'finished';
+      if (alive.length === 1) {
+        data.winner = alive[0];
+      } else {
+        // 전원 끊김 동시 탈락 → 마지막에 끊긴 사람(lastSeen 최대) 우승
+        let best = null, bestSeen = -1;
+        victims.forEach(id => {
+          const ls = (data.presence[id] && data.presence[id].lastSeen) || 0;
+          if (ls > bestSeen) { bestSeen = ls; best = id; }
+        });
+        data.winner = best;
+        logArr.push(`👑 ${nm(best)} — 마지막까지 연결을 지킨 자, 우승`);
+      }
+    } else {
+      // 4) 현재 AP가 탈락했으면 다음 생존자로 보정
+      let idx = data.currentTurnIndex || 0;
+      if (!data.players[order[idx]].alive) {
+        for (let t = 0; t < order.length; t++) {
+          idx = (idx + 1) % order.length;
+          if (data.players[order[idx]].alive) break;
+        }
+        data.currentTurnIndex = idx;
+      }
+    }
+    // 5) host 이양 (탈락자가 host였을 때만). owner 권위 단일 write 안에서만 변경.
+    if (victims.includes(data.host)) {
+      const conn = order.find(id => data.players[id].alive &&
+                   data.presence[id] && data.presence[id].connected !== false);
+      const newHost = conn || alive[0] || data.host;
+      if (newHost !== data.host) { data.host = newHost; logArr.push(`👑 방장 이양 → ${nm(newHost)}`); }
+    }
+    data.log = logArr;
+    return data;
+  });
+}
+
 // ── 대기실 렌더링 ─────────────────────────────────────────────
 function renderWaitingRoom(data) {
   document.getElementById('roomCodeDisplay').textContent = roomId;
@@ -768,6 +857,7 @@ function syncStateFromData(data) {
     currentTurnIndex: data.currentTurnIndex || 0,
     log: logArr,
     winner: data.winner || null,
+    voided: data.voided || false,   // 5c-4: 전투 동시 전멸 무효
   };
   Object.values(state.players).forEach(p => { p.hand = toArr(p.hand); });
 
@@ -809,6 +899,7 @@ function onRoomData(data) {
   if (curId === myUid) setStatus('내 턴 — 카드를 사용하거나 패스하세요');
   else                 setStatus(`${state.players[curId]?.name || '?'}의 턴...`);
   checkAPRecovery();   // 5c-2: 턴이 이미-끊긴 AP에게 넘어온 경우도 감지
+  checkElimination();  // 5c-4: room 변화 시에도 탈락 평가 (presence 무변화 케이스)
 }
 
 function classifyLog(msg) {
@@ -825,6 +916,14 @@ function classifyLog(msg) {
 function showWin() {
   clearSession();   // 게임 종료 → 새로고침 시 자동 복귀 안 함
   const meId = gameMode === 'online' ? myUid : 'you';
+  // 5c-4: 전투 동시 전멸 무효 — 승자 없음
+  if (state.voided) {
+    document.getElementById('winText').textContent = '그리고 아무도 없었다';
+    document.getElementById('winText').style.color  = 'var(--muted)';
+    document.getElementById('winSub').textContent   = '모두가 쓰러졌다. 무효.';
+    showScreen('win');
+    return;
+  }
   const won  = state.winner === meId;
   const winnerName = state.winner ? (state.players[state.winner]?.name||'?') : '없음';
   document.getElementById('winText').textContent = won ? '승리!' : `${winnerName} 우승!`;
@@ -1367,6 +1466,8 @@ function checkWin() {
   const alive = state.turnOrder.filter(id => state.players[id].alive);
   if (alive.length <= 1) {
     state.phase = 'finished'; state.winner = alive[0] || null;
+    state.voided = (alive.length === 0);   // 5c-4: 동시 전멸 무효
+    if (state.voided) pushLog('그리고 아무도 없었다.', 'sys');
     showWin(); return true;
   }
   return false;
@@ -1608,9 +1709,10 @@ async function commitSettlement() {
   });
   // 2) 승패 / 다음 턴 계산
   const alive = state.turnOrder.filter(id => state.players[id].alive);
-  let phase = 'playing', winner = null, nextIdx = state.currentTurnIndex;
+  let phase = 'playing', winner = null, voided = false, nextIdx = state.currentTurnIndex;
   if (alive.length <= 1) {
     phase = 'finished'; winner = alive[0] || null;
+    if (alive.length === 0) { voided = true; pushLog('그리고 아무도 없었다.', 'sys'); }   // 전투 동시 전멸 → 무효
   } else {
     nextIdx = (state.currentTurnIndex + 1) % state.turnOrder.length;
     for (let t = 0; t < state.turnOrder.length; t++) {
@@ -1618,11 +1720,11 @@ async function commitSettlement() {
       nextIdx = (nextIdx + 1) % state.turnOrder.length;
     }
   }
-  // 3) 단일 원자적 write (players + currentTurnIndex + phase/winner + action 종료)
+  // 3) 단일 원자적 write (players + currentTurnIndex + phase/winner/voided + action 종료)
   await db.ref('rooms/' + roomId).update({
     players: state.players,
     currentTurnIndex: nextIdx,
-    phase, winner,
+    phase, winner, voided,
     'action/done': true,
   });
 }
