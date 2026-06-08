@@ -333,6 +333,8 @@ const RESPONSE_TIMEOUT = 30000;   // 피격 응답 제한시간(ms). 초과 시 
 const SKIP_GRACE       = 5000;    // idle AP 끊김 후 턴 스킵까지 유예(ms). 5c-2. (탈락은 5c-4의 더 긴 유예)
 const ABORT_GRACE      = 0;       // owner 행동 중 끊김 → action abort 유예(ms). 5c-3. 0=즉시(묶인 spectator 즉시 해제)
 const ELIM_GRACE       = 30000;   // 끊김 후 탈락(alive=false)까지 유예(ms). 5c-4. (턴 스킵보다 길게)
+const GHOST_GRACE      = 120000;  // 유령 방 정리 유예(ms). 전원 끊김 후 이 시간 지나면 방 삭제 대상. (방치 방)
+const FIN_GRACE        = 10000;   // finished 방은 더 짧은 유예 후 정리 (게임 끝나 재사용 없음)
 const AI_IDS  = ["ai1","ai2","ai3"];
 const AI_NAMES = ["상대A","상대B","상대C"];
 
@@ -456,12 +458,49 @@ async function createRoom() {
   roomId = code; isHost = true;
   gameMode = 'online';
   saveSession();
+  sweepGhostRooms();   // 유령 방 정리(Stage 1): 새 방 만들 때 묘지 청소. fire-and-forget.
   await db.ref('rooms/' + roomId).set({
     host: myUid, phase:'waiting',
+    createdAt: firebase.database.ServerValue.TIMESTAMP,   // 신생 방 보호용 age 기준
     players: { [myUid]: { name:myName, characterId:null } }
   });
   listenRoom();
   showScreen('waiting');
+}
+
+// ── 유령 방 정리 (Stage 1) ────────────────────────────────────
+// 전원 끊김 + 유예 경과한 방을 다음 createRoom 시 청소. 백엔드 없는 클라 전용 그물.
+// 삭제는 per-room 트랜잭션으로 최신값 재확인 → rejoin/phase변경 시 abort. 멱등(이미 없으면 no-op).
+function isGhostRoom(data, now) {
+  if (!data) return false;
+  const pres = data.presence || {};
+  // 1차 안전판: 한 명이라도 접속 중이면 유령 아님 (혼자 대기 중인 사람 보호)
+  if (Object.values(pres).some(p => p && p.connected === true)) return false;
+  // 마지막 이탈 시각 = presence.lastSeen 최대값 (없으면 생성시각, 그것도 없으면 0)
+  let lastLeft = 0;
+  Object.values(pres).forEach(p => { if (p && p.lastSeen > lastLeft) lastLeft = p.lastSeen; });
+  if (!lastLeft) lastLeft = data.createdAt || 0;
+  const grace = data.phase === 'finished' ? FIN_GRACE : GHOST_GRACE;
+  return now - lastLeft >= grace;
+}
+
+async function sweepGhostRooms() {
+  try {
+    const snap = await db.ref('rooms').once('value');
+    const all = snap.val() || {};
+    const now = Date.now();
+    Object.keys(all).forEach(code => {
+      if (!isGhostRoom(all[code], now)) return;        // 읽은 시점 1차 필터
+      db.ref('rooms/' + code).transaction(data => {     // 삭제는 트랜잭션 재확인
+        // null 반환(삭제). Firebase 트랜잭션 첫 호출은 캐시(=null)로 들어오므로 여기서
+        // undefined(abort) 내면 서버 실값을 못 보고 중단됨 → null 반환해 통과시키면
+        // 서버 실값으로 재실행되어 아래 isGhostRoom 재확인이 제대로 작동. (이미 없으면 no-op)
+        if (!data) return null;                         // 멱등 + optimistic-null 패스 통과
+        if (!isGhostRoom(data, Date.now())) return;     // 최신값 재확인 → rejoin 등 시 abort(삭제 취소)
+        return null;                                    // 조건 충족 → 방 삭제
+      });
+    });
+  } catch (e) { /* 정리는 best-effort — 실패해도 방 생성엔 영향 없음 */ }
 }
 
 // 방 코드가 4자리일 때만 입장 버튼 활성화
