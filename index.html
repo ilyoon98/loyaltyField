@@ -236,7 +236,7 @@
     <div class="winner">
       <h2 id="winText">승리!</h2>
       <p style="color:var(--muted);margin:16px 0 24px" id="winSub"></p>
-      <button class="btn" onclick="location.reload()">다시 하기</button>
+      <button class="btn" onclick="leaveRoomAndReload()">다시 하기</button>
     </div>
   </section>
 </div>
@@ -969,6 +969,23 @@ function showWin() {
   document.getElementById('winText').style.color  = won ? 'var(--gold)' : 'var(--red)';
   document.getElementById('winSub').textContent   = won ? '마지막까지 살아남았다!' : '다음엔 더 잘 싸워보자.';
   showScreen('win');
+}
+
+// 유령 방 정리 Stage 2: "다시 하기" 시 자기 방(finished) 즉시 삭제 후 새로고침.
+// finished는 재사용 없는 종착이라 유예 없이 바로 정리(흔한 케이스 단축). 로컬 모드는 그냥 reload.
+async function leaveRoomAndReload() {
+  if (gameMode === 'online' && roomId && FB_READY) {
+    try {
+      if (roomRef) roomRef.off();   // 삭제 시 내 리스너 null 콜백 방지
+      await db.ref('rooms/' + roomId).transaction(data => {
+        if (!data) return null;                 // 이미 없음 → no-op (멱등)
+        if (data.phase !== 'finished') return;  // 안전: finished 아니면 삭제 안 함
+        return null;                            // finished 방 삭제
+      });
+    } catch (e) { /* best-effort — 실패해도 Stage 1 sweep이 나중에 정리 */ }
+  }
+  clearSession();
+  location.reload();
 }
 
 // ── 턴 시작 ──────────────────────────────────────────────────
