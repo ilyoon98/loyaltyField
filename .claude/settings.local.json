@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(cp \"C:/Users/imtl/loyaltyField/index.html\" \"C:/Users/imtl/loyaltyField/godfield_prototype.html\")",
+      "Bash(git commit -m '카드 사용/패스 시 즉시 1장 드로우 *)",
+      "Bash(git commit -m 'AI 턴 멈춤 버그 수정 — p 변수 누락 *)",
+      "Bash(git commit -m 'v0.3 — OnHit 카드 사용 시 즉시 1장 드로우 *)",
+      "Bash(git commit -m 'v0.4 — 온라인 멀티 추가 \\(Firebase 방 코드 + 대기실\\) *)",
+      "Bash(node -e ' *)",
+      "Bash(node _synccheck.js)",
+      "Bash(node _runcheck.js)",
+      "Bash(node _runcheck2.js)",
+      "Bash(cp index.html godfield_prototype.html)",
+      "Bash(node _allcheck.js)",
+      "Bash(node _stagecheck.js)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(git tag *)",
+      "Bash(node _5dcheck.js)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(rm -f _5dcheck.js _5dresult.txt)",
+      "Bash(grep -E \"\\\\.html$\")"
+    ]
+  }
+}
