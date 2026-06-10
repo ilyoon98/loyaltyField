@@ -146,6 +146,15 @@
     border:none;border-radius:7px;font-family:'Black Han Sans';cursor:pointer}
   #cheatPanel .cheat-apply:hover{filter:brightness(1.15)}
   #cheatMsg{font-size:.76rem;color:var(--gold);min-height:1.1em;margin-top:6px;text-align:center}
+  /* 손패 직접 반응 바 */
+  #reactionBar{display:none;background:var(--panel);border:2px solid var(--red);border-radius:12px;padding:12px;margin:10px 0;animation:stagePop .25s ease}
+  #reactionBar.active{display:block}
+  #reactionInfo{font-family:'Black Han Sans';color:var(--red);text-align:center;font-size:1.05rem}
+  #reactionTimer{color:var(--gold);text-align:center;font-size:.85rem;min-height:1.1em;margin-top:4px;font-family:'Black Han Sans'}
+  #reactionSummary{color:var(--muted);text-align:center;font-size:.82rem;margin-top:4px;font-family:'Gowun Dodum'}
+  .card.reactable{cursor:pointer;border-color:var(--gold);opacity:1}
+  .card.reactable:hover{transform:translateY(-4px);box-shadow:0 0 16px rgba(232,184,75,.6)}
+  .card.react-selected{border-color:var(--blue);box-shadow:0 0 14px rgba(100,160,255,.6)}
 </style>
 </head>
 <body>
@@ -223,6 +232,15 @@
       <div class="stage-zone" id="stageRight"></div>
     </div>
     <div class="players" id="playersBox"></div>
+    <div id="reactionBar">
+      <div id="reactionInfo">—</div>
+      <div id="reactionTimer"></div>
+      <div id="reactionSummary"></div>
+      <div class="center" style="margin-top:8px">
+        <button id="reactionConfirmBtn" class="btn" onclick="reactionConfirm()" style="display:none">방어 완료</button>
+        <button id="reactionTakeBtn" class="btn secondary" onclick="reactionTake()">그냥 맞기</button>
+      </div>
+    </div>
     <div class="hand-label">내 손패 — 카드를 눌러 사용</div>
     <div class="hand" id="handBox"></div>
     <div class="center" style="margin-top:12px">
@@ -362,6 +380,7 @@ let onlineReplaying = false;    // 온라인 큐 재생 중
 let onlineLocalLogOnly = false; // 온라인 재생 중 로그는 DOM에만 (DB 미기록)
 let awaitWatchStarted = false;  // watchAwait 상설 리스너 시작 여부
 let awaitModalIndex = null;     // 현재 열린 응답 모달의 await index
+let reactionCtx = null;         // 손패 직접 반응 컨텍스트 { attacker, target, atkKey, dmg, resolve, selectedDef:[] }
 // presence (5c-1): players/action/commit 경로와 분리된 별도 노드. 순수 감지+표시.
 let presenceMap = {};           // { uid: {connected, lastSeen} } — watchPresence가 갱신
 let presenceStarted = false;    // startPresence/watchPresence 1회 가드
@@ -934,6 +953,7 @@ function onRoomData(data) {
   // idle 상태: 신규 로그 표시 + 렌더 + 상태바
   newLogs.forEach(msg => appendLog(msg, classifyLog(msg)));
   render();
+  if (reactionCtx) return;   // 반응 진행 중이면 상태바 덮어쓰지 않음
   const curId = state.turnOrder[state.currentTurnIndex];
   if (curId === myUid) setStatus('내 턴 — 카드를 사용하거나 패스하세요');
   else                 setStatus(`${state.players[curId]?.name || '?'}의 턴...`);
@@ -1250,7 +1270,7 @@ function askDefense(attackerId, targetId, atkKey, dmg, aoe) {
   return new Promise(resolve => {
     const reactions = getReactionCards(targetId, aoe);
     if (targetId === myPlayerId()) {
-      openDefenseModal(attackerId, targetId, atkKey, dmg, reactions, resolve);
+      startReaction(attackerId, targetId, atkKey, dmg, reactions, resolve, false);
     } else {
       let choice = 'take';
       if (reactions.length > 0 && Math.random() < 0.5)
@@ -1258,6 +1278,79 @@ function askDefense(attackerId, targetId, atkKey, dmg, aoe) {
       setTimeout(() => resolve(choice), 500);
     }
   });
+}
+
+// ── 손패 직접 반응 (팝업 대신 손패에서 카드 클릭) ──────────────
+// withCountdown: 온라인 응답에만 카운트다운(코스메틱). resolve는 choice 계약 그대로.
+function startReaction(attacker, target, atkKey, dmg, reactions, resolve, withCountdown) {
+  reactionCtx = { attacker, target, atkKey, dmg, resolve, selectedDef: [] };
+  document.getElementById('reactionBar').classList.add('active');
+  document.getElementById('reactionInfo').innerHTML =
+    `🛡 공격받음! ${state.players[attacker]?.name || '?'}의 ${CARD_DEFS[atkKey]?.name || '공격'} — <b>${dmg}</b> 데미지`;
+  if (withCountdown) startReactCountdown(Math.floor(RESPONSE_TIMEOUT / 1000));
+  else stopReactCountdown();
+  updateReactionBar();
+  renderHand();
+  setStatus('손패에서 방어/반사/튕기기 카드를 누르거나 [그냥 맞기]');
+}
+
+function updateReactionBar() {
+  if (!reactionCtx) return;
+  const me = state.players[reactionCtx.target];
+  const tChar = me?.characterId;
+  const total = reactionCtx.selectedDef.reduce((s, i) => s + effValue(toArr(me.hand)[i], tChar), 0);
+  const sum = document.getElementById('reactionSummary');
+  const confirm = document.getElementById('reactionConfirmBtn');
+  if (reactionCtx.selectedDef.length > 0) {
+    sum.textContent = `합산 방어 −${total} / 남은 데미지 ${Math.max(0, reactionCtx.dmg - total)}`;
+    confirm.style.display = '';
+  } else {
+    sum.textContent = '방어 카드는 여러 장 눌러 누적할 수 있어요';
+    confirm.style.display = 'none';
+  }
+}
+
+// 손패 카드 클릭(반응 모드). DEF=누적 토글, REFLECT/Bounce=즉시 확정(방어와 혼용 불가).
+function handReactionClick(i) {
+  if (!reactionCtx) return;
+  const key = toArr(state.players[reactionCtx.target].hand)[i];
+  const d = CARD_DEFS[key];
+  if (!d || TYPE_TIMING[d.type] !== 'OnHit') return;
+  if (d.type === 'DEF') {
+    const pos = reactionCtx.selectedDef.indexOf(i);
+    if (pos >= 0) reactionCtx.selectedDef.splice(pos, 1);
+    else          reactionCtx.selectedDef.push(i);
+    updateReactionBar(); renderHand();
+  } else {
+    if (reactionCtx.selectedDef.length > 0) { setStatus('방어와 반사/튕기기는 함께 쓸 수 없어요'); return; }
+    resolveReaction({ k: key });
+  }
+}
+
+function reactionTake()    { if (reactionCtx) resolveReaction('take'); }
+function reactionConfirm() {
+  if (!reactionCtx || reactionCtx.selectedDef.length === 0) return;
+  const keys = reactionCtx.selectedDef.map(i => toArr(state.players[reactionCtx.target].hand)[i]);
+  resolveReaction({ defCards: keys });
+}
+
+function resolveReaction(choice) {
+  if (!reactionCtx) return;
+  const resolve = reactionCtx.resolve;
+  reactionCtx = null;
+  document.getElementById('reactionBar').classList.remove('active');
+  stopReactCountdown();
+  renderHand();
+  resolve(choice);
+}
+
+// 내 입력 없이 상황 종료(온라인: owner 타임아웃/취소로 await 해제) → UI만 닫음(resolve 안 함)
+function cancelReaction() {
+  if (!reactionCtx) return;
+  reactionCtx = null;
+  document.getElementById('reactionBar').classList.remove('active');
+  stopReactCountdown();
+  renderHand();
 }
 
 // 큐 전용 방어 모달 — 3-모드 탭 UI (v8: 방어 누적, 연쇄, ALL 반사 허용)
@@ -1657,15 +1750,14 @@ function watchAwait() {
   db.ref('rooms/' + roomId + '/action/await').on('value', snap => {
     const aw = snap.val();
     if (aw && aw.target === myUid) {
-      if (awaitModalIndex === aw.index) return;   // 이미 이 index 모달 열림
+      if (awaitModalIndex === aw.index) return;   // 이미 이 index 반응 진행 중
       awaitModalIndex = aw.index;
       const reactions = getReactionCards(myUid, aw.aoe);   // DEF/REFLECT/Bounce 모두 허용
-      openDefenseModal(aw.attacker, myUid, aw.item, aw.incoming, reactions,
-        choice => { awaitModalIndex = null; stopReactCountdown(); submitOnlineInput(aw.index, choice); });
-      startReactCountdown(Math.floor(RESPONSE_TIMEOUT / 1000));   // 응답 카운트다운(코스메틱)
+      startReaction(aw.attacker, myUid, aw.item, aw.incoming, reactions,
+        choice => { awaitModalIndex = null; submitOnlineInput(aw.index, choice); }, true);
     } else {
-      // await 해제(resolve 후) 또는 내 차례 아님 → 모달 닫기
-      if (awaitModalIndex !== null) { closeReactModal(); awaitModalIndex = null; stopReactCountdown(); }
+      // await 해제(owner resolve/타임아웃) 또는 내 차례 아님 → 반응 UI 닫기
+      if (awaitModalIndex !== null) { awaitModalIndex = null; cancelReaction(); }
     }
   });
 }
@@ -1673,7 +1765,7 @@ function watchAwait() {
 let reactTimerInterval = null;
 function startReactCountdown(sec) {
   stopReactCountdown();
-  const el = document.getElementById('reactTimer');
+  const el = document.getElementById('reactionTimer');
   let left = sec;
   const tick = () => {
     if (el) el.textContent = `⏳ ${left}초 내 미응답 시 자동 '맞기'`;
@@ -1685,7 +1777,7 @@ function startReactCountdown(sec) {
 }
 function stopReactCountdown() {
   if (reactTimerInterval) { clearInterval(reactTimerInterval); reactTimerInterval = null; }
-  const el = document.getElementById('reactTimer');
+  const el = document.getElementById('reactionTimer');
   if (el) el.textContent = '';
 }
 
@@ -1871,21 +1963,35 @@ function renderHand() {
   const myId = myPlayerId();
   const me   = state.players[myId];
   if (!me) return;
+  const reacting = !!reactionCtx && reactionCtx.target === myId;   // 손패 직접 반응 모드
   const myTurn   = state.turnOrder[state.currentTurnIndex] === myId;
   const targeting = !!pendingCardUse;
 
   toArr(me.hand).forEach((k, i) => {
     const d = CARD_DEFS[k]; if (!d) return;
     const isMyTurnCard = TYPE_TIMING[d.type] === 'MyTurn';
-    const usable  = myTurn && isMyTurnCard && !targeting && !isPlaying;
-    const pending = targeting && pendingCardUse.handIdx === i;
-    const div = document.createElement('div');
-    div.className = 'card' + (usable||pending?'':' disabled') + (pending?' active-turn':'');
-    let val = d.type==='HEAL'?`회복 ${d.value}`:d.type==='DEF'?`방어 ${d.value}`:d.type==='REFLECT'?'반사':d.type==='Bounce'?'떠넘김':`데미지 ${d.value}`;
+    const isOnHit = TYPE_TIMING[d.type] === 'OnHit';
+    const val = d.type==='HEAL'?`회복 ${d.value}`:d.type==='DEF'?`방어 ${d.value}`:d.type==='REFLECT'?'반사':d.type==='Bounce'?'떠넘김':`데미지 ${d.value}`;
     const prob = d.prob<1?` · 명중 ${Math.round(d.prob*100)}%`:'';
     const badge = d.trigger===me.characterId?`<div class="badge">전용</div>`:'';
-    div.innerHTML = `${badge}<div class="ci">${cardIcon(k)}</div><div class="cn tag-${d.type}">${d.name}</div><div class="ct">${d.type} · ${val}${prob}</div><div class="ct" style="color:var(--muted)">${isMyTurnCard?'내 턴':'피격 시'}</div>`;
-    if (usable) div.onclick = () => useCard(i);
+    const inner = `${badge}<div class="ci">${cardIcon(k)}</div><div class="cn tag-${d.type}">${d.name}</div><div class="ct">${d.type} · ${val}${prob}</div><div class="ct" style="color:var(--muted)">${isMyTurnCard?'내 턴':'피격 시'}</div>`;
+    const div = document.createElement('div');
+
+    if (reacting) {
+      // 반응 모드: OnHit 카드만 사용 가능. DEF는 누적(혼용 시 반사/튕기기 잠금).
+      const selected = d.type==='DEF' && reactionCtx.selectedDef.includes(i);
+      const blocked  = d.type!=='DEF' && reactionCtx.selectedDef.length > 0;  // 방어 선택 중 → 반사/튕기기 잠금
+      const clickable = isOnHit && !blocked;
+      div.className = 'card' + (clickable ? ' reactable' : ' disabled') + (selected ? ' react-selected' : '');
+      div.innerHTML = inner;
+      if (clickable) div.onclick = () => handReactionClick(i);
+    } else {
+      const usable  = myTurn && isMyTurnCard && !targeting && !isPlaying;
+      const pending = targeting && pendingCardUse.handIdx === i;
+      div.className = 'card' + (usable||pending?'':' disabled') + (pending?' active-turn':'');
+      div.innerHTML = inner;
+      if (usable) div.onclick = () => useCard(i);
+    }
     box.appendChild(div);
   });
 }
