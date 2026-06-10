@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.9.2</title>
+<title>으리챗 난투전 — 프로토타입 v0.9.3</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -152,7 +152,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.9.2</p>
+    <p id="headerSub">프로토타입 v0.9.3</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -328,7 +328,7 @@ const CHARACTERS = [
 ];
 
 const TYPE_TIMING = { ATK:"MyTurn", ALL:"MyTurn", HEAL:"MyTurn", DEF:"OnHit", REFLECT:"OnHit", Bounce:"OnHit" };
-const CONFIG = { startHp:80, handSize:5, maxHand:6 };
+const CONFIG = { startHp:50, maxHp:99, handSize:5, maxHand:6 };
 const RESPONSE_TIMEOUT = 30000;   // 피격 응답 제한시간(ms). 초과 시 owner가 자동 '맞기' 집행
 const SKIP_GRACE       = 5000;    // idle AP 끊김 후 턴 스킵까지 유예(ms). 5c-2. (탈락은 5c-4의 더 긴 유예)
 const ABORT_GRACE      = 0;       // owner 행동 중 끊김 → action abort 유예(ms). 5c-3. 0=즉시(묶인 spectator 즉시 해제)
@@ -1028,6 +1028,11 @@ function useCard(handIdx) {
     setStatus('⚔ 공격할 상대를 클릭하세요  [취소: 패스 버튼]');
     render(); return;
   }
+  if (def.type === 'HEAL') {
+    pendingCardUse = { handIdx, key, heal:true };   // 자신 포함 회복 대상 선택
+    setStatus('💚 회복할 대상을 클릭하세요 (자신 포함)  [취소: 패스 버튼]');
+    render(); return;
+  }
   me.hand.splice(handIdx, 1);
   // 보충 없음 — 연쇄 종료 후 일괄 보충 (v8)
   resolveMyTurnCard(myId, null, key);
@@ -1037,7 +1042,8 @@ function selectTarget(targetId) {
   if (isPlaying || onlineReplaying) return;
   if (!pendingCardUse) return;
   const myId = myPlayerId();
-  if (targetId === myId || !state.players[targetId].alive) return;
+  if (!state.players[targetId].alive) return;
+  if (!pendingCardUse.heal && targetId === myId) return;   // 공격은 자기 자신 불가, 회복은 허용
   const { handIdx, key } = pendingCardUse;
   pendingCardUse = null;
   state.players[myId].hand.splice(handIdx, 1);
@@ -1073,7 +1079,7 @@ function resolveMyTurnCard(attackerId, targetId, key) {
   const def = CARD_DEFS[key];
 
   if (def.type === 'HEAL') {
-    const q = buildHealQueue(attackerId, key);
+    const q = buildHealQueue(attackerId, targetId, key);
     playQueue(q, () => { if (!checkWin()) setTimeout(nextTurn, 400); });
     return;
   }
@@ -1357,9 +1363,15 @@ function openDefenseModal(attackerId, targetId, atkKey, dmg, reactions, resolve)
 async function renderEventVisual(ev, q, i) {
   if (ev.kind === 'selfheal') {
     const p = state.players[ev.target];
-    p.hp = Math.min(CONFIG.startHp, p.hp + ev.amount);
-    pushLog(`${p.name}: ${CARD_DEFS[ev.card].name} 효과로 HP ${ev.amount} 회복`, 'heal');
-    showStageLeft(`<span class="s-card">${cardIcon(ev.card)}</span>${p.name} HP +${ev.amount}`, 'heal');
+    const caster = ev.actor && ev.actor !== ev.target ? state.players[ev.actor] : null;
+    p.hp = Math.min(CONFIG.maxHp, p.hp + ev.amount);
+    if (caster) {
+      pushLog(`${caster.name} → ${p.name}: ${CARD_DEFS[ev.card].name}으로 HP ${ev.amount} 회복`, 'heal');
+      showStageLeft(`<span class="s-card">${cardIcon(ev.card)}</span>${caster.name} → ${p.name}<br>HP +${ev.amount}`, 'heal');
+    } else {
+      pushLog(`${p.name}: ${CARD_DEFS[ev.card].name} 효과로 HP ${ev.amount} 회복`, 'heal');
+      showStageLeft(`<span class="s-card">${cardIcon(ev.card)}</span>${p.name} HP +${ev.amount}`, 'heal');
+    }
     render(); floatNumber(ev.target, ev.amount, true); await sleep(700);
 
   } else if (ev.kind === 'announce') {
@@ -1513,6 +1525,8 @@ function aiTurn() {
     const cands = state.turnOrder.filter(id => id !== curId && state.players[id].alive);
     targetId = cands[Math.floor(Math.random()*cands.length)];
     // 공격 로그는 큐의 announce 박자에서 찍는다 (로컬 ATK)
+  } else if (def.type === 'HEAL') {
+    targetId = curId;   // AI는 자신을 회복
   }
   resolveMyTurnCard(curId, targetId, pick.k);
 }
@@ -1536,9 +1550,11 @@ function checkWin() {
 // ══════════════════════════════════════════════════════════════
 const actionRef = () => db.ref('rooms/' + roomId + '/action');
 
-function buildHealQueue(actorId, key) {
+// 회복 카드. 대상(자신 포함)을 healTarget로 받음. 회복량 보너스는 시전자 캐릭터 기준.
+function buildHealQueue(actorId, healTarget, key) {
   const ch = state.players[actorId].characterId;
-  return [{ kind:'selfheal', target:actorId, amount:effValue(key, ch), card:key }];
+  const tgt = healTarget || actorId;
+  return [{ kind:'selfheal', actor:actorId, target:tgt, amount:effValue(key, ch), card:key }];
 }
 
 // owner 진입점: 카드 확정 후 호출. 트랜잭션 가드로 "내가 진짜 AP인지" 원자적 확인 후 큐 업로드.
@@ -1547,7 +1563,7 @@ async function startOnlineAction(attackerId, targetId, key) {
   if (TYPE_TIMING[def.type] !== 'MyTurn') { setStatus('아직 온라인 미지원입니다'); render(); return; }
 
   let queue;
-  if (def.type === 'HEAL')      queue = buildHealQueue(attackerId, key);
+  if (def.type === 'HEAL')      queue = buildHealQueue(attackerId, targetId, key);
   else if (def.type === 'ATK')  queue = buildAtkQueue(attackerId, targetId, key);
   else if (def.type === 'ALL')  queue = buildAllQueue(attackerId, key);   // Stage 3: 전체공격
   else { setStatus('아직 온라인 미지원입니다'); render(); return; }
@@ -1819,7 +1835,7 @@ function render() {
   state.turnOrder.forEach(id => {
     const p = state.players[id];
     if (!p) return;
-    const isTargetable = targeting && id !== myId && p.alive;
+    const isTargetable = targeting && p.alive && (pendingCardUse.heal || id !== myId);
     let cls = 'pl';
     const isAct = isPlaying
       ? id === queueHighlight.attacker
@@ -1834,13 +1850,13 @@ function render() {
     div.className = cls;
     div.id = 'pl-' + id;
     const nameCls = id === myId ? 'you' : 'ai';
-    const hpPct = Math.max(0, p.hp / CONFIG.startHp * 100);
+    const hpPct = Math.max(0, p.hp / CONFIG.maxHp * 100);
     const hpCol = hpPct > 50 ? 'var(--green)' : hpPct > 25 ? 'var(--gold)' : 'var(--red)';
     div.innerHTML = `
       <div class="nm ${nameCls}">${p.name}${id===curId&&p.alive?' ◀':''}</div>
-      <div class="char-tag">${p.characterId}${isTargetable?' 👆 클릭하여 타겟':''}</div>
+      <div class="char-tag">${p.characterId}${isTargetable?(pendingCardUse.heal?' 💚 클릭하여 회복':' 👆 클릭하여 타겟'):''}</div>
       <div class="hpbar"><div class="hpfill" style="width:${hpPct}%;background:linear-gradient(90deg,${hpCol},${hpCol}aa)"></div>
-        <div class="hptext">${Math.max(0,p.hp)} / ${CONFIG.startHp}</div></div>
+        <div class="hptext">${Math.max(0,p.hp)} / ${CONFIG.maxHp}</div></div>
       <div class="char-tag" style="margin-top:6px">손패 ${toArr(p.hand).length}장</div>
       ${off ? '<div class="disc-tag">🔌 연결 끊김</div>' : ''}`;
     if (isTargetable) div.onclick = () => selectTarget(id);
