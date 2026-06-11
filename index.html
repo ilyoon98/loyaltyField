@@ -21,7 +21,9 @@
   .char-card:hover{border-color:var(--gold);transform:translateY(-3px)}
   .char-card.sel{border-color:var(--gold);background:var(--panel-light);box-shadow:0 0 0 2px var(--gold) inset}
   .char-card .nm{font-family:'Black Han Sans';font-size:1.2rem;color:var(--gold)}
-  .char-card .ef{font-size:.78rem;color:var(--muted);margin-top:6px;line-height:1.4}
+  .char-card .ef{font-size:.95rem;color:var(--muted);margin-top:6px;line-height:1.4}
+  .char-img{width:64px;height:64px;border-radius:50%;object-fit:cover;margin:0 auto 6px;display:flex;align-items:center;justify-content:center;border:2px solid var(--line);background:var(--panel-light)}
+  .char-img.placeholder{font-size:2rem}
   .btn{background:var(--gold);color:#1a1410;border:none;padding:12px 28px;border-radius:8px;font-family:'Black Han Sans';font-size:1.1rem;cursor:pointer;transition:.15s}
   .btn:hover{filter:brightness(1.1)}.btn:disabled{opacity:.4;cursor:not-allowed}
   .btn.secondary{background:var(--panel-light);color:var(--ink);border:1px solid var(--line)}
@@ -333,17 +335,23 @@ function cardIcon(k){ return CARD_ICON[k] || '🃏'; }
 
 // ── 캐릭터 정의 ──────────────────────────────────────────────
 const CHARACTERS = [
-  { id:"최초", desc:"뭉치 짖기 명중률 ↑" },
-  { id:"종원", desc:"요리하기 회복량 ↑" },
-  { id:"기종", desc:"진통제 방어량 ↑" },
-  { id:"현일", desc:"프로틴 공격 시 회복" },
-  { id:"기훈", desc:"유수암쇄권 대상 ↑" },
-  { id:"규형", desc:"(트리거 미배치)" },
-  { id:"지원", desc:"(트리거 미배치)" },
-  { id:"소민", desc:"(트리거 미배치)" },
-  { id:"준형", desc:"(트리거 미배치)" },
-  { id:"종문", desc:"(트리거 미배치)" },
+  { id:"최초", desc:"뭉치 짖기 명중률 ↑", img:null },
+  { id:"종원", desc:"요리하기 회복량 ↑", img:null },
+  { id:"기종", desc:"진통제 방어량 ↑", img:null },
+  { id:"현일", desc:"프로틴 공격 시 회복", img:null },
+  { id:"기훈", desc:"유수암쇄권 대상 ↑", img:null },
+  { id:"규형", desc:"(트리거 미배치)", img:null },
+  { id:"지원", desc:"(트리거 미배치)", img:null },
+  { id:"소민", desc:"(트리거 미배치)", img:null },
+  { id:"준형", desc:"(트리거 미배치)", img:null },
+  { id:"종문", desc:"(트리거 미배치)", img:null },
 ];
+// 캐릭터 카드 이미지 슬롯: img URL 있으면 <img>, 없으면 이모지 placeholder (나중에 URL 채우면 됨)
+function charImgHtml(c) {
+  return c.img
+    ? `<img class="char-img" src="${c.img}" alt="${c.id}">`
+    : `<div class="char-img placeholder">🧑</div>`;
+}
 
 const TYPE_TIMING = { ATK:"MyTurn", ALL:"MyTurn", HEAL:"MyTurn", DEF:"OnHit", REFLECT:"OnHit", Bounce:"OnHit" };
 const CONFIG = { startHp:50, maxHp:99, handSize:5, maxHand:6 };
@@ -430,7 +438,7 @@ function renderLocalCharSelect() {
   CHARACTERS.forEach(c => {
     const div = document.createElement('div');
     div.className = 'char-card';
-    div.innerHTML = `<div class="nm">${c.id}</div><div class="ef">${c.desc}</div>`;
+    div.innerHTML = `${charImgHtml(c)}<div class="nm">${c.id}</div><div class="ef">${c.desc}</div>`;
     div.onclick = () => {
       selectedChar = c.id;
       document.querySelectorAll('#charGrid .char-card').forEach(e => e.classList.remove('sel'));
@@ -847,7 +855,7 @@ function renderWaitingRoom(data) {
   CHARACTERS.forEach(c => {
     const div = document.createElement('div');
     div.className = 'char-card' + (c.id === myChar ? ' sel' : '');
-    div.innerHTML = `<div class="nm">${c.id}</div><div class="ef">${c.desc}</div>`;
+    div.innerHTML = `${charImgHtml(c)}<div class="nm">${c.id}</div><div class="ef">${c.desc}</div>`;
     div.onclick = () => db.ref('rooms/'+roomId+'/players/'+myUid+'/characterId').set(c.id);
     grid.appendChild(div);
   });
