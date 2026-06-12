@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.9.3</title>
+<title>으리챗 난투전 — 프로토타입 v0.9.4</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -157,13 +157,19 @@
   .card.reactable{cursor:pointer;border-color:var(--gold);opacity:1}
   .card.reactable:hover{transform:translateY(-4px);box-shadow:0 0 16px rgba(232,184,75,.6)}
   .card.react-selected{border-color:var(--blue);box-shadow:0 0 14px rgba(100,160,255,.6)}
+  /* 전역 클릭 이펙트 (순수 비주얼, pointer-events 없음) */
+  .click-fx{position:fixed;pointer-events:none;z-index:9999}
+  .click-fx .ring{position:absolute;left:0;top:0;border:2px solid var(--gold);border-radius:50%;transform:translate(-50%,-50%);animation:clickRing .5s ease-out forwards}
+  @keyframes clickRing{0%{width:6px;height:6px;opacity:.9}100%{width:46px;height:46px;opacity:0}}
+  .click-fx .spark{position:absolute;left:0;top:0;width:5px;height:5px;border-radius:50%;background:var(--gold);box-shadow:0 0 6px var(--gold);animation:clickSpark .5s ease-out forwards}
+  @keyframes clickSpark{0%{opacity:1;transform:translate(-50%,-50%)}100%{opacity:0;transform:translate(calc(-50% + var(--tx)),calc(-50% + var(--ty)))}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.9.3</p>
+    <p id="headerSub">프로토타입 v0.9.4</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -2209,6 +2215,30 @@ if (!FB_READY) {
 }
 renderLocalCharSelect();
 tryRejoinOnline();   // 새로고침 시 진행 중이던 온라인 방으로 복귀 (Stage 5b)
+
+// ── 전역 클릭 이펙트 (순수 비주얼) ────────────────────────────
+function spawnClickFx(x, y) {
+  const fx = document.createElement('div');
+  fx.className = 'click-fx';
+  fx.style.left = x + 'px';
+  fx.style.top  = y + 'px';
+  const ring = document.createElement('div');
+  ring.className = 'ring';
+  fx.appendChild(ring);
+  const N = 6;
+  for (let i = 0; i < N; i++) {
+    const s = document.createElement('div');
+    s.className = 'spark';
+    const ang = (Math.PI * 2 * i) / N;
+    const dist = 16 + Math.random() * 10;
+    s.style.setProperty('--tx', Math.cos(ang) * dist + 'px');
+    s.style.setProperty('--ty', Math.sin(ang) * dist + 'px');
+    fx.appendChild(s);
+  }
+  document.body.appendChild(fx);
+  setTimeout(() => fx.remove(), 550);
+}
+document.addEventListener('pointerdown', e => spawnClickFx(e.clientX, e.clientY));
 </script>
 </body>
 </html>
