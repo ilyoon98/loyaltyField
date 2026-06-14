@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.10.0</title>
+<title>으리챗 난투전 — 프로토타입 v0.10.1</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -181,7 +181,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.10.0</p>
+    <p id="headerSub">프로토타입 v0.10.1</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -2022,7 +2022,7 @@ function render() {
     div.innerHTML = `
       <div class="nm ${nameCls}">${p.name}${id===curId&&p.alive?' ◀':''}</div>
       <div class="char-tag">${p.characterId}${isTargetable?(pendingCardUse.heal?' 💚 클릭하여 회복':' 👆 클릭하여 타겟'):''}</div>
-      <div class="hpbar"><div class="hpfill" style="width:${hpPct}%;background:linear-gradient(90deg,${hpCol},${hpCol}aa)"></div>
+      <div class="hpbar"><div class="hpfill" style="width:${hpPct}%;background:linear-gradient(180deg,${hpCol},rgba(0,0,0,.3))"></div>
         <div class="hptext">${Math.max(0,p.hp)} / ${CONFIG.maxHp}</div></div>
       <div class="char-tag" style="margin-top:6px">손패 ${toArr(p.hand).length}장</div>
       ${off ? '<div class="disc-tag">🔌 연결 끊김</div>' : ''}`;
