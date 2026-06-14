@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>으리챗 난투전 — 프로토타입 v0.10.1</title>
+<title>으리챗 난투전 — 프로토타입 v0.10.2</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Gowun+Dodum&display=swap');
   :root{--bg:#1a1410;--panel:#2a221b;--panel-light:#3a2f25;--ink:#f3e9d8;--muted:#a8967c;--gold:#e8b84b;--red:#d6543f;--green:#6fae6a;--blue:#5b9bd5;--line:#4a3c2e;}
@@ -128,7 +128,7 @@
   .mode-card .mc-icon{font-size:2.4rem;margin-bottom:10px}
   .mode-card .mc-title{font-family:'Black Han Sans';font-size:1.3rem;color:var(--gold)}
   .mode-card .mc-desc{font-size:.82rem;color:var(--muted);margin-top:6px}
-  .room-code-big{font-family:'Black Han Sans';font-size:3rem;color:var(--gold);letter-spacing:10px;text-align:center;background:var(--panel);border:2px solid var(--line);border-radius:12px;padding:16px;margin-bottom:8px;cursor:pointer}
+  .room-code-big{font-family:'Black Han Sans';font-size:2.1rem;color:var(--gold);letter-spacing:6px;text-align:center;background:var(--panel);border:2px solid var(--line);border-radius:12px;padding:8px 16px;margin-bottom:6px;cursor:pointer}
   .room-code-big:hover{border-color:var(--gold)}
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media(max-width:560px){.two-col{grid-template-columns:1fr}.mode-grid{flex-direction:column;align-items:center}}
@@ -181,7 +181,7 @@
 <div class="wrap">
   <header>
     <h1>으리챗 난투전</h1>
-    <p id="headerSub">프로토타입 v0.10.1</p>
+    <p id="headerSub">프로토타입 v0.10.2</p>
   </header>
 
   <!-- 모드 선택 -->
@@ -219,18 +219,18 @@
   <section id="screen-waiting" class="screen">
     <div style="text-align:center;margin-bottom:4px;font-size:.85rem;color:var(--muted)">방 코드 (클릭하면 복사)</div>
     <div id="roomCodeDisplay" class="room-code-big" onclick="copyRoomCode()">—</div>
-    <div style="text-align:center;font-size:.78rem;color:var(--muted);margin-bottom:16px">친구에게 이 코드를 알려주세요</div>
-    <div class="two-col">
+    <div style="text-align:center;font-size:.78rem;color:var(--muted);margin-bottom:8px">친구에게 이 코드를 알려주세요</div>
+    <div class="two-col" style="align-items:start">
       <div>
         <div class="hand-label">참가 중인 플레이어</div>
         <div id="waitingPlayerList"></div>
       </div>
       <div>
         <div class="hand-label">내 캐릭터 선택</div>
-        <div id="onlineCharGrid" class="char-grid" style="grid-template-columns:1fr 1fr;margin:8px 0"></div>
+        <div id="onlineCharGrid" class="char-grid" style="grid-template-columns:1fr 1fr;margin:8px 0;max-height:40vh;overflow-y:auto;padding-right:4px"></div>
       </div>
     </div>
-    <div class="center">
+    <div class="center" style="position:sticky;bottom:0;background:var(--bg);padding:10px 0 4px;margin-top:4px">
       <button id="onlineStartBtn" class="btn" onclick="startOnlineGame()" style="display:none">게임 시작</button>
       <div id="waitingStatus" style="color:var(--muted);font-size:.9rem;margin-top:10px"></div>
     </div>
