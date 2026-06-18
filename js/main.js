@@ -6,50 +6,11 @@
 // ── Firebase (단일 인스턴스 모듈) ─────────────────────────────
 import { db, FB_READY } from './core/firebase.js';
 
-// ── 카드 정의 ────────────────────────────────────────────────
-const CARD_DEFS = {
-  munchi:  { name:"뭉치 짖기",  type:"ALL",     value:10, prob:0.5, trigger:"최초", plusType:"ProbabilityUP", plusValue:0.25 },
-  kalbang: { name:"칼빵",       type:"ATK",     value:5,  prob:1,   trigger:null,   plusType:null,            plusValue:0 },
-  cook:    { name:"요리하기",   type:"HEAL",    value:5,  prob:1,   trigger:"종원", plusType:"ValueUP",       plusValue:2 },
-  painkill:{ name:"진통제",     type:"DEF",     value:10, prob:1,   trigger:"기종", plusType:"ValueUP",       plusValue:5 },
-  protein: { name:"프로틴",     type:"ATK",     value:5,  prob:1,   trigger:"현일", plusType:"HEAL",          plusValue:2 },
-  mirror:  { name:"무지개 반사",type:"REFLECT", value:0,  prob:1,   trigger:null,   plusType:null,            plusValue:0 },
-  bounce:  { name:"유수암쇄권", type:"Bounce",  value:0,  prob:1,   trigger:"기훈", plusType:"Target",        plusValue:2 },
-};
-const CARD_KEYS = Object.keys(CARD_DEFS);
-const CARD_ICON = { munchi:'🐕', kalbang:'🔪', cook:'🍳', painkill:'💊', protein:'💪', mirror:'🌈', bounce:'🥋' };
-function cardIcon(k){ return CARD_ICON[k] || '🃏'; }
-
-// ── 캐릭터 정의 ──────────────────────────────────────────────
-const CHARACTERS = [
-  { id:"최초", desc:"뭉치 짖기 명중률 ↑", img:null },
-  { id:"종원", desc:"요리하기 회복량 ↑", img:null },
-  { id:"기종", desc:"진통제 방어량 ↑", img:null },
-  { id:"현일", desc:"프로틴 공격 시 회복", img:null },
-  { id:"기훈", desc:"유수암쇄권 대상 ↑", img:null },
-  { id:"규형", desc:"(트리거 미배치)", img:null },
-  { id:"지원", desc:"(트리거 미배치)", img:null },
-  { id:"소민", desc:"(트리거 미배치)", img:null },
-  { id:"준형", desc:"(트리거 미배치)", img:null },
-  { id:"종문", desc:"(트리거 미배치)", img:null },
-];
-// 캐릭터 카드 이미지 슬롯: img URL 있으면 <img>, 없으면 이모지 placeholder (나중에 URL 채우면 됨)
-function charImgHtml(c) {
-  return c.img
-    ? `<img class="char-img" src="${c.img}" alt="${c.id}">`
-    : `<div class="char-img placeholder">🧑</div>`;
-}
-
-const TYPE_TIMING = { ATK:"MyTurn", ALL:"MyTurn", HEAL:"MyTurn", DEF:"OnHit", REFLECT:"OnHit", Bounce:"OnHit" };
-const CONFIG = { startHp:50, maxHp:99, handSize:5, maxHand:6 };
-const RESPONSE_TIMEOUT = 30000;   // 피격 응답 제한시간(ms). 초과 시 owner가 자동 '맞기' 집행
-const SKIP_GRACE       = 5000;    // idle AP 끊김 후 턴 스킵까지 유예(ms). 5c-2. (탈락은 5c-4의 더 긴 유예)
-const ABORT_GRACE      = 0;       // owner 행동 중 끊김 → action abort 유예(ms). 5c-3. 0=즉시(묶인 spectator 즉시 해제)
-const ELIM_GRACE       = 30000;   // 끊김 후 탈락(alive=false)까지 유예(ms). 5c-4. (턴 스킵보다 길게)
-const GHOST_GRACE      = 120000;  // 유령 방 정리 유예(ms). 전원 끊김 후 이 시간 지나면 방 삭제 대상. (방치 방)
-const FIN_GRACE        = 10000;   // finished 방은 더 짧은 유예 후 정리 (게임 끝나 재사용 없음)
-const AI_IDS  = ["ai1","ai2","ai3"];
-const AI_NAMES = ["상대A","상대B","상대C"];
+// ── 데이터·상수 모듈 ─────────────────────────────────────────
+import { CARD_DEFS, CARD_KEYS, CARD_ICON, cardIcon, TYPE_TIMING, CONFIG,
+         RESPONSE_TIMEOUT, SKIP_GRACE, ABORT_GRACE, ELIM_GRACE, GHOST_GRACE, FIN_GRACE,
+         AI_IDS, AI_NAMES } from './data/cards.js';
+import { CHARACTERS, charImgHtml, effProb, effValue } from './data/characters.js';
 
 // ── 런타임 상태 ───────────────────────────────────────────────
 let gameMode = 'local';
@@ -107,16 +68,6 @@ function goOnline() {
 // ── 유틸 ─────────────────────────────────────────────────────
 function drawCard() { return CARD_KEYS[Math.floor(Math.random() * CARD_KEYS.length)]; }
 function newHand(n) { return Array.from({ length: n }, drawCard); }
-function effProb(key, chr) {
-  const d = CARD_DEFS[key]; let p = d.prob;
-  if (d.trigger === chr && d.plusType === "ProbabilityUP") p += d.plusValue;
-  return Math.min(1, p);
-}
-function effValue(key, chr) {
-  const d = CARD_DEFS[key]; let v = d.value;
-  if (d.trigger === chr && d.plusType === "ValueUP") v += d.plusValue;
-  return v;
-}
 function rollHit(p) { return Math.random() < p; }
 function toArr(v) { return v ? (Array.isArray(v) ? v : Object.values(v)) : []; }
 
