@@ -3,26 +3,8 @@
    으리챗 난투전 v0.4 — 로컬 AI + 온라인 멀티 (Firebase)
    ============================================================= */
 
-// ── FIREBASE CONFIG ──────────────────────────────────────────
-// Firebase 콘솔(console.firebase.google.com) → 프로젝트 만들기
-// → Realtime Database 생성(테스트 모드) → 웹앱 추가
-// → 아래 값을 자신의 프로젝트 값으로 교체
-const FIREBASE_CONFIG = {
-  apiKey:            "AIzaSyCJNIEKNrlBVHaw3msQDc9wl5jkPh1srAs",
-  authDomain:        "loyalty-super-melee.firebaseapp.com",
-  databaseURL:       "https://loyalty-super-melee-default-rtdb.firebaseio.com",
-  projectId:         "loyalty-super-melee",
-  storageBucket:     "loyalty-super-melee.firebasestorage.app",
-  messagingSenderId: "752015537678",
-  appId:             "1:752015537678:web:b8c02f26b7d5edb0e4ee5f"
-};
-
-const FB_READY = FIREBASE_CONFIG.apiKey !== "YOUR_API_KEY";
-let db = null;
-if (FB_READY) {
-  firebase.initializeApp(FIREBASE_CONFIG);
-  db = firebase.database();
-}
+// ── Firebase (단일 인스턴스 모듈) ─────────────────────────────
+import { db, FB_READY } from './core/firebase.js';
 
 // ── 카드 정의 ────────────────────────────────────────────────
 const CARD_DEFS = {
