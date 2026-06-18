@@ -11,6 +11,7 @@ import { CARD_DEFS, CARD_KEYS, CARD_ICON, cardIcon, TYPE_TIMING, CONFIG,
          RESPONSE_TIMEOUT, SKIP_GRACE, ABORT_GRACE, ELIM_GRACE, GHOST_GRACE, FIN_GRACE,
          AI_IDS, AI_NAMES } from './data/cards.js';
 import { CHARACTERS, charImgHtml, effProb, effValue } from './data/characters.js';
+import { drawCard, newHand, rollHit, toArr, sleep } from './util.js';
 
 // ── 런타임 상태 ───────────────────────────────────────────────
 let gameMode = 'local';
@@ -65,11 +66,6 @@ function goOnline() {
   showScreen('online');
 }
 
-// ── 유틸 ─────────────────────────────────────────────────────
-function drawCard() { return CARD_KEYS[Math.floor(Math.random() * CARD_KEYS.length)]; }
-function newHand(n) { return Array.from({ length: n }, drawCard); }
-function rollHit(p) { return Math.random() < p; }
-function toArr(v) { return v ? (Array.isArray(v) ? v : Object.values(v)) : []; }
 
 // ── 로컬 캐릭터 선택 ──────────────────────────────────────────
 function renderLocalCharSelect() {
@@ -817,7 +813,6 @@ function applyDamage(targetId, dmg, sourceId, label) {
 }
 
 // ── 이벤트 큐 + 재생기 (기획 12장) ────────────────────────────
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── 큐 재생 중 공격자/피격자 강조 ──────────────────────────────
 let queueHighlight = { attacker: null, targeted: null };
