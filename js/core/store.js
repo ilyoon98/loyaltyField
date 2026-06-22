@@ -22,3 +22,6 @@ export const S = {
   reactTimerInterval: null, audioCtx: null,
   cheatVisible: false, titleClicks: 0, titleClickTimer: null,
 };
+
+// 내 플레이어 id (로컬='you', 온라인=myUid). 여러 모듈이 공유.
+export function myPlayerId() { return S.gameMode === 'online' ? S.myUid : 'you'; }
