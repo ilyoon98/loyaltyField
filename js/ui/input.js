@@ -7,7 +7,8 @@ import { CARD_DEFS, TYPE_TIMING, CONFIG, cardIcon, RESPONSE_TIMEOUT } from '../d
 import { effValue } from '../data/characters.js';
 import { toArr, drawCard } from '../util.js';
 import { setStatus, pushLog } from './render.js';
-import { resolveMyTurnCard, nextTurn, onlinePass, startReactCountdown, stopReactCountdown } from '../main.js';
+import { resolveMyTurnCard, nextTurn } from '../engine.js';
+import { onlinePass, startReactCountdown, stopReactCountdown } from '../main.js';
 
 // ── 카드 사용 ────────────────────────────────────────────────
 export function useCard(handIdx) {
