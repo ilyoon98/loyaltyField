@@ -8,7 +8,7 @@ import { drawCard, newHand, rollHit, toArr, sleep } from './util.js';
 import { showScreen, setStatus, showStageLeft, showStageCenter, showStageRight,
          clearCenterRight, clearAllZones, clearStage, floatNumber, vfxAt, playSFX, pushLog } from './ui/render.js';
 import { render, renderHand, startReaction } from './ui/input.js';
-import { startOnlineAction, showWin } from './main.js';   // 임시(online 추출 시 경로 교체)
+import { startOnlineAction, showWin } from './online.js';
 
 export function startLocalGame() {
   const aiChars = AI_IDS.map(() => {

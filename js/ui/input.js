@@ -8,7 +8,7 @@ import { effValue } from '../data/characters.js';
 import { toArr, drawCard } from '../util.js';
 import { setStatus, pushLog } from './render.js';
 import { resolveMyTurnCard, nextTurn } from '../engine.js';
-import { onlinePass, startReactCountdown, stopReactCountdown } from '../main.js';
+import { onlinePass, startReactCountdown, stopReactCountdown } from '../online.js';
 
 // ── 카드 사용 ────────────────────────────────────────────────
 export function useCard(handIdx) {
